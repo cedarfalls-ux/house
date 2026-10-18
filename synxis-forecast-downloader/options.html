@@ -37,6 +37,35 @@
       </div>
 
       <div class="card">
+        <h2>Auto refresh</h2>
+        <label class="check">
+          <input type="checkbox" id="autoRefreshEnabled" />
+          <span
+            >When nobody has moved the mouse or typed for the given seconds, either <b>refresh the page</b> or
+            <b>click "Home" twice</b> (opens the CRS / SPH Dashboard menu, then goes Home 2 seconds later, without
+            reloading). Any mouse or keyboard activity starts the count again; the extension icon shows the seconds
+            left. Only the tab of each address is used, and it stays on the same page.</span
+          >
+        </label>
+        <div id="rules"></div>
+        <div class="row" style="margin-top: 6px">
+          <button class="btn" id="addRule">+ Add website</button>
+          <span class="small muted">Seconds: at least 15.</span>
+        </div>
+        <label class="check" style="margin-top: 12px">
+          <input type="checkbox" id="answerPopups" />
+          <span
+            >SynXis pop-ups: <b>"You do not have a Bank open"</b> → click <b>NO</b> (after a refresh, or when nobody is
+            using the page) and <b>"Your session is about to expire"</b> → click <b>KEEP SESSION ACTIVE</b></span
+          >
+        </label>
+        <label class="check">
+          <input type="checkbox" id="keepAwake" />
+          <span>Keep the screen on (the computer won't go to sleep while Chrome is running)</span>
+        </label>
+      </div>
+
+      <div class="card">
         <h2>Daily automatic download</h2>
         <label class="check">
           <input type="checkbox" id="scheduleEnabled" />
@@ -107,34 +136,6 @@
             <button class="btn" id="openDownloadSettings">Change Chrome's download location</button>
           </div>
         </div>
-      </div>
-
-      <div class="card">
-        <h2>Auto refresh</h2>
-        <label class="check">
-          <input type="checkbox" id="autoRefreshEnabled" />
-          <span
-            >Refresh these pages when nobody has moved the mouse or typed for the given seconds. Any mouse or keyboard
-            activity starts the count again. Only the tab of each address is refreshed, and it stays on the same
-            page.</span
-          >
-        </label>
-        <div id="rules"></div>
-        <div class="row" style="margin-top: 6px">
-          <button class="btn" id="addRule">+ Add website</button>
-          <span class="small muted">Seconds: at least 15.</span>
-        </div>
-        <label class="check" style="margin-top: 12px">
-          <input type="checkbox" id="answerPopups" />
-          <span
-            >SynXis pop-ups: <b>"You do not have a Bank open"</b> → click <b>NO</b> (after a refresh, or when nobody is
-            using the page) and <b>"Your session is about to expire"</b> → click <b>KEEP SESSION ACTIVE</b></span
-          >
-        </label>
-        <label class="check">
-          <input type="checkbox" id="keepAwake" />
-          <span>Keep the screen on (the computer won't go to sleep while Chrome is running)</span>
-        </label>
       </div>
 
       <div class="card">

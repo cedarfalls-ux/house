@@ -7,12 +7,14 @@ import {
   normalizeSiteUrl,
   findRule,
   originPattern,
+  badgeCountdown,
 } from './common.js';
 import { pageAgent, mainWorldViewerInfo } from './page-agent.js';
 
 const ALARM_WATCHDOG = 'watchdog';
 const ALARM_STARTUP = 'startup-check';
 const ALARM_REFRESH = 'auto-refresh-check';
+const SETTINGS_POPUP = 'options.html?popup=1';
 
 const OVERALL_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_LOGS = 300;
@@ -603,7 +605,7 @@ async function runFlow(trigger) {
     if (scheduled) await recordAttempt(() => ({ success: true }));
     log('info', `Saved: ${saved.path}`);
     await showBanner({ mainTabId: ctx.mainTabId }, `✔ Forecast CSV saved: ${saved.path}`, 'ok', 12000);
-    setBadge('', null);
+    badgeError = false;
     notify('Forecast report downloaded', saved.path);
   } catch (err) {
     failed = true;
@@ -611,7 +613,7 @@ async function runFlow(trigger) {
     await chrome.storage.local.set({ lastRun: { ok: false, at: Date.now(), trigger, error: message } });
     log('error', `Run failed: ${message}`);
     await showBanner(ctx, `✖ ${message}`, 'err', 30000);
-    setBadge('!', '#d93025');
+    badgeError = true;
     notify('Forecast download failed', message);
     const tabs = await collectDiagnostic([ctx.mainTabId, ...ctx.reportTabIds].filter(Boolean));
     await chrome.storage.local.set({ lastDiagnostic: { at: Date.now(), error: message, tabs } });
@@ -632,6 +634,7 @@ function startRun(trigger) {
   if (currentRun) return { started: false, reason: 'A download is already running.' };
   currentRun = runFlow(trigger).finally(() => {
     currentRun = null;
+    updateBadge(); // countdown, "!" or nothing
   });
   return { started: true };
 }
@@ -784,7 +787,14 @@ async function syncContentScript() {
   await chrome.scripting.unregisterContentScripts({ ids: [CONTENT_ID] }).catch(() => {});
   if (!matches.length) return;
   await chrome.scripting.registerContentScripts([
-    { id: CONTENT_ID, matches, js: ['content-autorefresh.js'], allFrames: true, runAt: 'document_idle' },
+    {
+      id: CONTENT_ID,
+      matches,
+      js: ['content-autorefresh.js'],
+      allFrames: true,
+      matchOriginAsFallback: true, // also blank frames inside those pages, so mouse moves there count
+      runAt: 'document_idle',
+    },
   ]);
   // Tabs that are already open get it right away.
   for (const tab of await chrome.tabs.query({ url: matches })) {
@@ -813,7 +823,7 @@ async function refreshDue(sender) {
   const tab = sender.tab;
   const rule = s.autoRefreshEnabled && tab ? findRule(s, tab.url) : null;
   if (!rule) return { stop: true };
-  return refreshTab(tab, rule);
+  return refreshTab(tab, rule, true);
 }
 
 // Every 30 s: catches tabs whose own timer runs late or not at all (background,
@@ -839,17 +849,64 @@ async function refreshCheck() {
   }
 }
 
-async function refreshTab(tab, rule) {
+// fromTab: the tab's own timer asked, so it clicks "Home" itself.
+async function refreshTab(tab, rule, fromTab = false) {
   if (currentRun) return { retryMs: 30000 }; // never refresh in the middle of a download
   if ((await idleState(rule.seconds)) === 'active') return { retryMs: 5000 };
-  await chrome.storage.session.set({ [`refreshed:${tab.id}`]: Date.now() });
-  await chrome.storage.local.set({ lastAutoRefresh: { at: Date.now(), url: tab.url } });
-  // Stay on the same page: load the tab's current address again (a reload would
-  // ask to resend a form after a post-back).
-  if (tab.url.includes('#')) await chrome.tabs.reload(tab.id);
-  else await chrome.tabs.update(tab.id, { url: tab.url });
+  const key = `refreshed:${tab.id}`;
+  const last = (await chrome.storage.session.get(key))[key] || 0;
+  if (Date.now() - last < 5000) return { retryMs: rule.seconds * 1000 }; // the other check just did it
+  await chrome.storage.session.set({ [key]: Date.now() });
+  await chrome.storage.local.set({ lastAutoRefresh: { at: Date.now(), url: tab.url, mode: rule.mode } });
+  if (rule.mode === 'clickHome' && !tab.discarded) {
+    if (fromTab) return { action: 'clickHome' };
+    const res = await chrome.tabs.sendMessage(tab.id, { type: 'clickHome' }, { frameId: 0 }).catch(() => null);
+    if (res && res.ok) return { clicked: true };
+  }
+  await reloadTab(tab);
   return { reloaded: true };
 }
+
+// Stay on the same page: load the tab's current address again (a reload would
+// ask to resend a form after a post-back).
+async function reloadTab(tab) {
+  if (tab.url.includes('#')) await chrome.tabs.reload(tab.id);
+  else await chrome.tabs.update(tab.id, { url: tab.url });
+}
+
+// ---- seconds until the next auto refresh, on the toolbar icon ----
+
+const countdowns = new Map(); // tabId -> time the next refresh is due
+let ticker = null;
+let badgeError = false; // last download failed: "!" when no countdown is shown
+
+chrome.storage.session.get('countdowns').then(({ countdowns: saved }) => {
+  for (const [tabId, due] of Object.entries(saved || {})) if (!countdowns.has(+tabId)) countdowns.set(+tabId, due);
+  updateBadge();
+});
+
+function setCountdown(tabId, due) {
+  if (due) countdowns.set(tabId, due);
+  else countdowns.delete(tabId);
+  chrome.storage.session.set({ countdowns: Object.fromEntries(countdowns) });
+  updateBadge();
+}
+
+function updateBadge() {
+  if (countdowns.size && !ticker) ticker = setInterval(updateBadge, 1000);
+  if (!countdowns.size && ticker) {
+    clearInterval(ticker);
+    ticker = null;
+  }
+  if (currentRun) return; // "RUN" stays while a download runs
+  if (!countdowns.size) return setBadge(badgeError ? '!' : '', badgeError ? '#d93025' : null);
+  const next = Math.min(...countdowns.values());
+  setBadge(badgeCountdown(next - Date.now()), '#0f7c8c');
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (countdowns.has(tabId)) setCountdown(tabId, null);
+});
 
 // Keep the screen on and the computer awake (night runs, SynXis session).
 async function applyKeepAwake() {
@@ -866,7 +923,6 @@ function createIconMenu() {
       ['run', 'Download Forecast now'],
       ['cancel', 'Cancel the running download'],
       ['lastFile', 'Show last downloaded file'],
-      ['settings', 'Settings'],
     ];
     for (const [id, title] of items) chrome.contextMenus.create({ id, title, contexts: ['action'] });
   });
@@ -877,15 +933,11 @@ function runFromMenu() {
   if (!res.started) notify('Forecast download', res.reason);
 }
 
-// Clicking the icon opens Settings; downloads start only from "Download now".
-chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
-
 chrome.contextMenus.onClicked.addListener(async (info) => {
   if (info.menuItemId === 'run') runFromMenu();
   else if (info.menuItemId === 'cancel') {
     if (currentCtx) currentCtx.aborted = 'Cancelled by user';
-  } else if (info.menuItemId === 'settings') chrome.runtime.openOptionsPage();
-  else if (info.menuItemId === 'lastFile') {
+  } else if (info.menuItemId === 'lastFile') {
     const { lastSuccess } = await chrome.storage.local.get('lastSuccess');
     if (lastSuccess && lastSuccess.downloadId) chrome.downloads.show(lastSuccess.downloadId);
     else chrome.downloads.showDefaultFolder();
@@ -895,10 +947,12 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 // ---------------------------------------------------------------- events
 
 async function setUpEverything() {
-  // Leftovers from version 1.x: fixed-time alarm, login ping, toolbar popup.
+  // Leftovers from older versions: fixed-time alarm, login ping, toolbar popup.
   await chrome.alarms.clear('daily-run');
   await chrome.alarms.clear('keep-alive');
-  await chrome.action.setPopup({ popup: '' });
+  // Clicking the icon opens Settings in the icon's pop-up (downloads start only
+  // from the "Download Forecast now" button).
+  await chrome.action.setPopup({ popup: SETTINGS_POPUP });
   const s = await getSettings();
   await allowPopupsFor(new URL(s.startUrl).origin);
   await ensureAlarms();
@@ -924,6 +978,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   else if (alarm.name === ALARM_REFRESH) await refreshCheck();
 });
 
+chrome.permissions.onAdded.addListener(() => syncContentScript());
+
 chrome.idle.onStateChanged.addListener((state) => {
   if (state !== 'active') checkDue('computer inactive');
 });
@@ -931,6 +987,9 @@ chrome.idle.onStateChanged.addListener((state) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.devIdleOverride) checkDue('inactivity changed');
   if (area !== 'local' || !changes.settings) return;
+  if (!changes.settings.newValue || !changes.settings.newValue.autoRefreshEnabled) {
+    for (const tabId of [...countdowns.keys()]) setCountdown(tabId, null);
+  }
   ensureAlarms();
   syncContentScript();
   applyKeepAwake();
@@ -960,6 +1019,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return reply(tabConfig(sender));
     case 'refreshDue':
       return reply(refreshDue(sender));
+    case 'reloadMe':
+      if (sender.tab) reloadTab(sender.tab);
+      return false;
+    case 'countdown':
+      if (sender.tab && sender.frameId === 0) setCountdown(sender.tab.id, msg.dueAt);
+      return false;
     case 'activity':
       if (sender.tab) chrome.tabs.sendMessage(sender.tab.id, { type: 'activity' }, { frameId: 0 }).catch(() => {});
       return false;

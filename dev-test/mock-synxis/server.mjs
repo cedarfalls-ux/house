@@ -60,7 +60,7 @@ function dashboard(menuMode, { bankPopup, sessionPopup, sphDash }) {
   <a href="javascript:void(0)" id="navHome">Home</a><a href="#">Front Office</a><a href="#">Accounting</a>
   <a href="javascript:void(0)" id="navReports">Reports</a><a href="#">Support</a>
 </div>
-<div id="homeMenu"><a href="/CC/default.aspx">Dashboard</a><a href="/CC/default.aspx?dash=sph">SPH Dashboard</a></div>
+<div id="homeMenu"><a href="/CC/default.aspx">CRS Dashboard</a><a href="/CC/default.aspx?dash=sph">SPH Dashboard</a></div>
 <div id="mega">
   <div class="left">
     <h3>Reports</h3>
@@ -121,6 +121,8 @@ ${sessionPopup ? `<div id="sessModal" style="position:fixed;inset:0;background:r
     document.getElementById('bankYes').addEventListener('click', () => { location.href = '/CC/OpenBank.aspx'; });
   }
   window.keptAlive = false;
+  window.homeClickTimes = [];
+  window.homeMenuWasOpen = false;
   const sess = document.getElementById('sessModal');
   if (sess) {
     setTimeout(() => { sess.style.display = 'flex'; }, 3000);
@@ -132,7 +134,12 @@ ${sessionPopup ? `<div id="sessModal" style="position:fixed;inset:0;background:r
     const homeMenu = root.getElementById('homeMenu');
     if (mode !== 'css') {
       root.getElementById('navReports').addEventListener('click', () => { if (!window.bankOpen) mega.classList.toggle('open'); });
-      root.getElementById('navHome').addEventListener('click', () => { if (!window.bankOpen) homeMenu.classList.toggle('open'); });
+      root.getElementById('navHome').addEventListener('click', () => {
+        window.homeClickTimes.push(Date.now());
+        if (window.bankOpen) return;
+        homeMenu.classList.toggle('open');
+        if (homeMenu.classList.contains('open')) window.homeMenuWasOpen = true;
+      });
     }
     root.querySelectorAll('.left div').forEach((d) => d.addEventListener('click', () => {
       root.querySelectorAll('.left div').forEach((x) => x.classList.remove('sel'));

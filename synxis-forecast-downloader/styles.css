@@ -264,3 +264,45 @@ ol {
     grid-column: 1;
   }
 }
+
+/* ---- Settings inside the toolbar icon's pop-up ---- */
+
+html.popup {
+  overflow-x: hidden;
+}
+
+html.popup body {
+  width: 770px;
+}
+
+html.popup .header {
+  padding: 8px 14px;
+}
+
+html.popup .page {
+  max-width: none;
+}
+
+html.popup .card {
+  margin: 8px 10px;
+  padding: 12px 14px;
+}
+
+html.popup .field {
+  grid-template-columns: 190px 1fr;
+}
+
+html.popup .savebar {
+  margin: 8px 10px;
+}
+
+.rule {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 8px 0;
+}
+
+.rule input[type='number'] {
+  width: 90px;
+}

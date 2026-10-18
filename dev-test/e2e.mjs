@@ -249,7 +249,7 @@ for (const [label, cookies] of [
 }
 
 // The toolbar icon has no popup: clicking it opens Settings (downloads start only from the button)
-check('Icon click opens Settings, not a download', (await evaluate(ui.sessionId, 'chrome.action.getPopup({})')) === '');
+check('Icon click opens Settings in the pop-up (no new tab, no download)', (await evaluate(ui.sessionId, 'chrome.action.getPopup({})')).endsWith('/options.html?popup=1'));
 
 // 4. "Remember from open SynXis tab" saves the Forecast page address (tab is on Forecast now)
 const learned = await message({ type: 'learnForecast' });
@@ -327,12 +327,13 @@ await setSettings({
   autoRefreshRules: [{ url: `https://${HOST}/CC/default.aspx`, seconds: 15 }],
   answerPopups: true,
 });
-await setIdle('idle');
+await setIdle('active'); // nobody away yet: no refresh while the test sets up
 await sleep(1500);
 await resetExisting();
 const other = await openPage(`https://${HOST}/CC/reports/criteria.aspx?report=forecast`);
+await setIdle('idle');
 const timeOrigin = (p) => evaluate(p.sessionId, 'performance.timeOrigin').catch(() => null);
-await send('Target.activateTarget', { targetId: existing.targetId }); // SynXis tab in front, like at the desk
+await send('Page.bringToFront', {}, existing.sessionId); // SynXis tab in front, like at the desk
 const e1 = await timeOrigin(existing);
 const o1 = await timeOrigin(other);
 console.log('  moving the mouse on the SynXis tab for 24 s…');
@@ -368,6 +369,40 @@ for (let i = 0; i < 60 && e4 === e3; i++) {
 check('Auto refresh: also works while the tab is in the background', e4 !== e3);
 await closePage(other);
 
+// Seconds left on the extension icon; mouse movement starts the count again
+await send('Page.bringToFront', {}, existing.sessionId);
+await resetExisting();
+await sleep(1000);
+const badge = async () => Number(await evaluate(ui.sessionId, 'chrome.action.getBadgeText({})'));
+const b1 = await badge();
+await sleep(4000);
+const b2 = await badge();
+check('Icon countdown: shows the seconds left and counts down', b1 >= 11 && b1 <= 15 && b2 <= b1 - 3, `${b1} -> ${b2}`);
+await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 320, y: 260 }, existing.sessionId);
+await sleep(1500);
+const b3 = await badge();
+check('Icon countdown: mouse movement starts it again', b3 >= 13, `${b2} -> ${b3}`);
+
+// Second kind of auto refresh: click "Home" twice, 2 s apart, no reload
+await setCookies({ bankpopup: '0' });
+await setSettings({ autoRefreshRules: [{ url: `https://${HOST}/CC/default.aspx`, seconds: 15, mode: 'clickHome' }] });
+await resetExisting();
+const h0 = await timeOrigin(existing);
+let clicks = [];
+for (let i = 0; i < 40 && clicks.length < 2; i++) {
+  await sleep(1000);
+  clicks = (await evaluate(existing.sessionId, 'window.homeClickTimes').catch(() => [])) || [];
+}
+check('Click-Home mode: clicked "Home" twice after 15 s without activity', clicks.length >= 2, `${clicks.length} clicks`);
+const gap = clicks[1] - clicks[0];
+check('Click-Home mode: 2 seconds between the two clicks', gap >= 1800 && gap <= 3500, `${gap} ms`);
+check(
+  'Click-Home mode: Dashboard menu opened by the 1st click, closed by the 2nd, page not reloaded',
+  (await evaluate(existing.sessionId, "window.homeMenuWasOpen && !document.getElementById('homeMenu').classList.contains('open')")) === true &&
+    (await timeOrigin(existing)) === h0,
+);
+await setSettings({ autoRefreshRules: [{ url: `https://${HOST}/CC/default.aspx`, seconds: 15, mode: 'reload' }] });
+
 // "Your session is about to expire" -> KEEP SESSION ACTIVE
 await setIdle('active'); // no refreshes during this check
 await setCookies({ bankpopup: '0', sessionpopup: '1' });
@@ -383,14 +418,15 @@ await setCookies({ sessionpopup: '0' });
 await evaluate(ui.sessionId, `chrome.storage.local.remove('devIdleOverride')`);
 
 // screenshots of the UI for a visual check
-for (const name of ['options']) {
-  const p = await openPage(`chrome-extension://${extId}/${name}.html`);
+for (const name of ['options', 'popup']) {
+  const p = await openPage(`chrome-extension://${extId}/options.html${name === 'popup' ? '?popup=1' : ''}`);
+  if (name === 'popup') await send('Emulation.setDeviceMetricsOverride', { width: 780, height: 600, deviceScaleFactor: 1, mobile: false }, p.sessionId);
   await sleep(800);
   const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: name === 'options' }, p.sessionId);
   fs.writeFileSync(path.join(work, `${name}.png`), Buffer.from(data, 'base64'));
   await closePage(p);
 }
-console.log(`\nScreenshot: ${work}/options.png`);
+console.log(`\nScreenshots: ${work}/options.png ${work}/popup.png`);
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed}/${results.length} checks passed`);

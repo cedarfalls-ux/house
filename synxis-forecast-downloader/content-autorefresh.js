@@ -1,6 +1,7 @@
 // Runs in the tabs of the auto-refresh sites and in SynXis tabs (all frames).
 //  - Auto refresh (top frame): after N seconds without mouse/keyboard input the
-//    background reloads this tab (it also checks the whole computer was idle).
+//    tab is reloaded, or "Home" is clicked twice 2 s apart (the background also
+//    checks the whole computer was idle). The seconds left go to the icon badge.
 //  - SynXis pop-ups: "You do not have a Bank open" -> NO (right after an auto
 //    refresh, or when nobody is using the page), "Your session is about to
 //    expire" -> KEEP SESSION ACTIVE.
@@ -12,7 +13,10 @@
   const BANNER_ID = 'sfd-banner';
   let config = { refreshSeconds: null, guard: false, answerBankUntil: 0 };
   let timer = null;
-  let lastActivity = Date.now();
+  const loadedAt = Date.now();
+  let lastActivity = loadedAt; // last real mouse/keyboard input
+  let lastAction = 0; // last time this script clicked "Home"
+  let lastSentDue = 0;
   let lastForward = 0;
   let lastPointer = '';
   const lastAnswer = {};
@@ -24,20 +28,38 @@
       return null; // extension was reloaded or updated
     }
   };
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // ---------- auto refresh ----------
+
+  const dueAt = () => Math.max(lastActivity, lastAction) + config.refreshSeconds * 1000;
+
+  // Tell the background when the next refresh is due (shown on the icon).
+  function reportCountdown() {
+    if (!isTop) return;
+    const due = config.refreshSeconds ? dueAt() : null;
+    if (due === lastSentDue || (due && lastSentDue && Math.abs(due - lastSentDue) < 1000)) return;
+    lastSentDue = due;
+    send({ type: 'countdown', dueAt: due });
+  }
 
   function arm(ms) {
     clearTimeout(timer);
     timer = null;
-    if (isTop && config.refreshSeconds) timer = setTimeout(fire, ms);
+    if (isTop && config.refreshSeconds) timer = setTimeout(fire, Math.max(0, ms));
+    reportCountdown();
   }
 
   async function fire() {
-    const waitMs = config.refreshSeconds * 1000 - (Date.now() - lastActivity);
+    const waitMs = dueAt() - Date.now();
     if (waitMs > 0) return arm(waitMs);
     const res = await send({ type: 'refreshDue' });
-    if (res && res.retryMs) arm(res.retryMs);
+    if (!res) return;
+    if (res.action === 'clickHome') {
+      if (!(await clickHomeTwice())) send({ type: 'reloadMe' }); // no "Home" on this page
+      return arm(config.refreshSeconds * 1000);
+    }
+    if (res.retryMs) arm(res.retryMs);
   }
 
   function onActivity(e) {
@@ -52,7 +74,8 @@
     lastActivity = Date.now();
     if (isTop) {
       if (!timer && config.refreshSeconds) arm(config.refreshSeconds * 1000);
-    } else if (Date.now() - lastForward > 2000) {
+      reportCountdown();
+    } else if (Date.now() - lastForward > 1000) {
       lastForward = Date.now();
       send({ type: 'activity' }); // tell the top frame of this tab
     }
@@ -67,9 +90,16 @@
     if (msg.type === 'activity') {
       lastActivity = Date.now();
       if (!timer && config.refreshSeconds) arm(config.refreshSeconds * 1000);
+      reportCountdown();
     } else if (msg.type === 'idleFor' && isTop) {
       // Asked by the background every 30 s (timers in background tabs run late).
-      sendResponse({ ms: Date.now() - lastActivity });
+      sendResponse({ ms: Date.now() - Math.max(lastActivity, lastAction) });
+    } else if (msg.type === 'clickHome' && isTop) {
+      clickHomeTwice().then((ok) => {
+        arm(config.refreshSeconds * 1000);
+        sendResponse({ ok });
+      });
+      return true;
     }
   });
 
@@ -77,12 +107,55 @@
     const c = await send({ type: 'tabConfig' });
     if (!c) return;
     config = c;
-    arm((config.refreshSeconds || 0) * 1000);
+    arm(config.refreshSeconds ? dueAt() - Date.now() : 0);
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.settings) loadConfig();
   });
+
+  // ---------- "Home" clicks (keeps SynXis active without reloading) ----------
+
+  // The top-navigation "Home" item: visible, exact text, highest on the page.
+  function findHome() {
+    const found = [];
+    for (const t of textNodes()) {
+      const el = t.parentElement;
+      if (el && norm(t.nodeValue) === 'home' && !el.closest('h1,h2,h3,h4,h5,h6') && isVisible(el)) found.push(el);
+    }
+    found.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    let el = found[0];
+    for (let n = el, i = 0; n && i < 4; n = parentOf(n), i++) {
+      if (n.matches && n.matches('a,button,[role="button"],[role="menuitem"],[role="tab"],[onclick]')) return n;
+    }
+    return el || null;
+  }
+
+  function clickElement(el) {
+    const r = el.getBoundingClientRect();
+    const init = { bubbles: true, composed: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    for (const type of ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup']) {
+      el.dispatchEvent(new (type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent)(type, init));
+    }
+    el.click();
+  }
+
+  let clicking = false;
+  async function clickHomeTwice() {
+    if (clicking || Date.now() - lastAction < 5000) return true; // already done just now
+    const home = findHome();
+    if (!home) return false;
+    clicking = true;
+    try {
+      clickElement(home); // 1st click opens the CRS / SPH Dashboard menu
+      await sleepMs(2000);
+      clickElement(findHome() || home); // 2nd click goes to Home
+      lastAction = Date.now();
+      return true;
+    } finally {
+      clicking = false;
+    }
+  }
 
   // ---------- SynXis pop-ups ----------
 
@@ -162,9 +235,10 @@
   function guard() {
     if (!config.guard || !document.body) return;
     const bank = findMessage((t) => t.includes('do not have a bank open') || t.includes('like to open a bank'));
-    // Only answer for the user right after an auto refresh or when nobody is using the page,
-    // so someone working at the desk can still choose YES.
-    if (bank && (Date.now() < config.answerBankUntil || Date.now() - lastActivity > 30000)) answer('bank', bank, 'NO');
+    // Answer for the user only right after an auto refresh that nobody has touched since,
+    // or when nobody is using the page, so someone at the desk can still choose YES.
+    const afterRefresh = Date.now() < config.answerBankUntil && lastActivity === loadedAt;
+    if (bank && (afterRefresh || Date.now() - lastActivity > 30000)) answer('bank', bank, 'NO');
     const session = findMessage((t) => t.includes('session is about to expire'));
     if (session) answer('session', session, 'KEEP SESSION ACTIVE');
   }

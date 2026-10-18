@@ -11,6 +11,7 @@ import {
   ruleMatches,
   findRule,
   originPattern,
+  badgeCountdown,
   buildTargetPath,
   sanitizeFolder,
 } from '../synxis-forecast-downloader/common.js';
@@ -81,6 +82,19 @@ test('only the tab of the entered address is refreshed', () => {
   const site = { url: 'example.com', seconds: 30 };
   assert.ok(ruleMatches(site, 'https://example.com/any/page'));
   assert.equal(findRule(s({ autoRefreshRules: [{ url: 'example.com', seconds: 5 }] }), 'https://example.com/'), null);
+});
+
+test('refresh mode defaults to reloading the page', () => {
+  const url = 'https://example.com/';
+  assert.equal(findRule(s({ autoRefreshRules: [{ url, seconds: 30 }] }), url).mode, 'reload');
+  assert.equal(findRule(s({ autoRefreshRules: [{ url, seconds: 30, mode: 'clickHome' }] }), url).mode, 'clickHome');
+});
+
+test('icon countdown text', () => {
+  assert.equal(badgeCountdown(14200), '15');
+  assert.equal(badgeCountdown(299000), '299');
+  assert.equal(badgeCountdown(-500), '0');
+  assert.equal(badgeCountdown(1020000), '17m');
 });
 
 test('file path uses folder, template tokens and .csv', () => {

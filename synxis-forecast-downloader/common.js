@@ -19,9 +19,10 @@ export const DEFAULT_SETTINGS = {
   fileNameTemplate: 'Forecast_{range}_{date}',
   conflictAction: 'uniquify', // 'uniquify' | 'overwrite'
 
-  // Auto refresh: reload the tab of each site after its seconds of inactivity.
+  // Auto refresh: after its seconds of inactivity, each site's tab is either
+  // reloaded (mode 'reload') or gets two clicks on "Home" 2 s apart ('clickHome').
   autoRefreshEnabled: false,
-  autoRefreshRules: [{ url: 'https://controlcenter-p2.synxis.com/CC/default.aspx', seconds: 300 }],
+  autoRefreshRules: [{ url: 'https://controlcenter-p2.synxis.com/CC/default.aspx', seconds: 300, mode: 'reload' }],
   answerPopups: true, // SynXis: Bank pop-up -> NO, session about to expire -> KEEP SESSION ACTIVE
   keepAwake: true, // keep the screen on / computer awake
 
@@ -164,8 +165,17 @@ export function ruleMatches(rule, tabUrl) {
   }
 }
 
+export const REFRESH_MODES = { reload: 'Refresh the page', clickHome: 'Click "Home" twice (2 s apart)' };
+
 export function findRule(settings, tabUrl) {
-  return (settings.autoRefreshRules || []).find((r) => r.seconds >= 15 && ruleMatches(r, tabUrl)) || null;
+  const rule = (settings.autoRefreshRules || []).find((r) => r.seconds >= 15 && ruleMatches(r, tabUrl));
+  return rule ? { ...rule, mode: rule.mode === 'clickHome' ? 'clickHome' : 'reload' } : null;
+}
+
+// Badge text for the seconds left: "45", "299", "17m".
+export function badgeCountdown(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return s < 1000 ? String(s) : `${Math.ceil(s / 60)}m`;
 }
 
 // Match pattern for chrome.scripting/permissions, e.g. "https://example.com/*"

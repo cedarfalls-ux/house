@@ -6,13 +6,15 @@ Two things in one extension:
    Forecast** report with **Date Range = Next Year** as a **CSV** file into a
    folder you choose: once a day by itself, or when you click
    **Download Forecast now**.
-2. **Auto refresh** – refreshes the tab of the website(s) you enter after the
-   number of seconds you set without mouse/keyboard activity, and answers the
-   SynXis pop-ups for you.
+2. **Auto refresh** – after the number of seconds you set without
+   mouse/keyboard activity, either refreshes the tab of the website you entered
+   or clicks SynXis "Home" twice, and answers the SynXis pop-ups for you. The
+   extension icon counts down the seconds left.
 
-**Click the extension icon to open Settings.** Nothing is downloaded by the
-click; the download starts only from the **▶ Download Forecast now** button
-(or right-click the icon → *Download Forecast now*).
+**Click the extension icon: Settings open in its pop-up** (no new tab). Nothing
+is downloaded by the click; the download starts only from the
+**▶ Download Forecast now** button (or right-click the icon →
+*Download Forecast now*).
 
 ## Forecast download
 
@@ -48,17 +50,30 @@ working after Chrome or the computer restarts (see *Keep it working every day*).
 ## Auto refresh
 
 In Settings → **Auto refresh**: turn it on, enter the website address (for
-example `https://controlcenter-p2.synxis.com/CC/default.aspx`) and the seconds.
-Add more websites with **+ Add website**.
+example `https://controlcenter-p2.synxis.com/CC/default.aspx`), the seconds,
+and what should happen. Add more websites with **+ Add website**.
 
-- The tab is refreshed when nobody has moved the mouse or typed for that many
-  seconds. Any real mouse movement or key press starts the count again.
-- Only the tab of the address you entered is refreshed, and it stays on the
-  same page.
+Two kinds, chosen per website:
+
+- **Refresh the page** – the tab is reloaded and stays on the same page.
+- **Click "Home" twice (2 s apart)** – the 1st click opens the
+  *CRS Dashboard / SPH Dashboard* menu, the 2nd click 2 seconds later goes
+  Home. The page is not reloaded; it just shows activity on the screen. (If a
+  page has no "Home", it is refreshed instead.)
+
+For both:
+
+- It happens when nobody has moved the mouse or typed for that many seconds,
+  and again every that many seconds while nobody is there. Any real mouse
+  movement or key press starts the count again.
+- The **extension icon shows the seconds left** (e.g. `45`, or `17m` for long
+  waits).
+- Only the tab of the address you entered is used.
 - Never during a Forecast download.
 - SynXis pop-ups: **"You do not have a Bank open"** → **NO** (right after an
-  auto refresh, or when nobody is using the page, so you can still click YES
-  yourself), **"Your session is about to expire"** → **KEEP SESSION ACTIVE**.
+  auto refresh nobody has touched, or when nobody is using the page, so you can
+  still click YES yourself), **"Your session is about to expire"** →
+  **KEEP SESSION ACTIVE**.
 - **Keep the screen on**: the screen stays on and the computer does not go to
   sleep while Chrome runs.
 - Websites other than SynXis ask for Chrome's permission once, when you save.
@@ -73,8 +88,8 @@ Add more websites with **+ Add website**.
 4. Click **Load unpacked** and select the `synxis-forecast-downloader` folder.
 5. Click the puzzle icon in the toolbar and **pin** "SynXis Forecast Auto Downloader".
 6. Log in to SynXis in this same Chrome profile (select the right hotel).
-7. Click the extension icon → Settings opens → **▶ Download Forecast now** to
-   test it.
+7. Click the extension icon → Settings open in the pop-up →
+   **▶ Download Forecast now** to test it.
 
 **Updating to a new version:** replace the files in the folder, then click the
 reload (↻) button on the extension in `chrome://extensions`.
@@ -91,7 +106,7 @@ reload (↻) button on the extension in `chrome://extensions`.
 | Folder (inside Downloads) | `SynXis Forecast` | Any name; `/` for sub-folders, e.g. `Hotel Reports/Forecast` |
 | File name | `Forecast_{range}_{date}` | Tokens: `{date}` `{time}` `{range}` `{YYYY}` `{MM}` `{DD}` `{HH}` `{mm}` |
 | If file exists | Keep both | Or **Replace** (e.g. file name `Forecast_latest` + Replace = always one up-to-date file) |
-| Auto refresh | Off | Website + seconds (at least 15) |
+| Auto refresh | Off | Website + seconds (at least 15) + *Refresh the page* or *Click "Home" twice* |
 | SynXis pop-ups | On | Bank → NO, session → KEEP SESSION ACTIVE |
 | Keep the screen on | On | |
 | Date Range | Next Year | Any value from the SynXis dropdown |
@@ -140,7 +155,7 @@ synxis-forecast-downloader/   the extension (load this folder in Chrome)
   page-agent.js               code run inside the SynXis pages for the download
   content-autorefresh.js      in-page part of auto refresh and the pop-up answers
   common.js                   settings, schedule, auto-refresh and file-name helpers
-  options.*                   the Settings page
+  options.*                   the Settings page (also the toolbar icon's pop-up)
 dev-test/                     tests (not needed to use the extension)
   common.test.mjs             unit tests:  node --test dev-test/common.test.mjs
   mock-synxis/server.mjs      a fake SynXis site with the same menus, pop-ups and report pop-up

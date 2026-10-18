@@ -2,7 +2,6 @@ import {
   DEFAULT_SETTINGS,
   DATE_RANGES,
   getSettings,
-  saveSettings,
   buildTargetPath,
   sanitizeFolder,
   validWindow,
@@ -10,9 +9,14 @@ import {
   normalizeSiteUrl,
   originPattern,
   formatDateTime,
+  badgeCountdown,
+  REFRESH_MODES,
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
+// Opened from the toolbar icon: shown inside the icon's pop-up.
+if (new URLSearchParams(location.search).has('popup')) document.documentElement.classList.add('popup');
+let loadedSettings = { ...DEFAULT_SETTINGS };
 const CHECKS = [
   'scheduleEnabled',
   'runAfterWindow',
@@ -44,16 +48,18 @@ for (const r of DATE_RANGES) $('dateRange').append(new Option(r, r));
 
 // ---------- auto refresh rows ----------
 
-function addRuleRow(rule = { url: '', seconds: 300 }) {
+function addRuleRow(rule = { url: '', seconds: 300, mode: 'reload' }) {
   const row = document.createElement('div');
-  row.className = 'row rule';
-  row.style.margin = '6px 0';
+  row.className = 'rule';
   row.innerHTML =
-    '<input type="text" class="ruleUrl" placeholder="https://controlcenter-p2.synxis.com/CC/default.aspx" style="flex: 1; max-width: none">' +
-    '<input type="number" class="ruleSeconds" min="15" max="86400" title="Seconds of inactivity"> <span class="small">sec</span>' +
-    '<button class="btn danger" title="Remove">✕</button>';
+    '<div class="row"><input type="text" class="ruleUrl" placeholder="https://controlcenter-p2.synxis.com/CC/default.aspx" style="flex: 1; max-width: none">' +
+    '<button class="btn danger" title="Remove">✕</button></div>' +
+    '<div class="row" style="margin-top: 6px">after <input type="number" class="ruleSeconds" min="15" max="86400" title="Seconds of inactivity"> sec without activity:' +
+    '<select class="ruleMode" style="width: auto"></select></div>';
+  for (const [value, label] of Object.entries(REFRESH_MODES)) row.querySelector('.ruleMode').append(new Option(label, value));
   row.querySelector('.ruleUrl').value = rule.url;
   row.querySelector('.ruleSeconds').value = rule.seconds;
+  row.querySelector('.ruleMode').value = rule.mode === 'clickHome' ? 'clickHome' : 'reload';
   row.querySelector('button').addEventListener('click', () => row.remove());
   $('rules').append(row);
 }
@@ -63,6 +69,7 @@ function readRules() {
     .map((row) => ({
       raw: row.querySelector('.ruleUrl').value.trim(),
       seconds: Number(row.querySelector('.ruleSeconds').value),
+      mode: row.querySelector('.ruleMode').value,
     }))
     .filter((r) => r.raw);
 }
@@ -76,11 +83,12 @@ function readForm() {
   for (const k of CHECKS) s[k] = $(k).checked;
   for (const k of TEXTS) s[k] = $(k).value.trim();
   for (const k of NUMBERS) s[k] = Number($(k).value);
-  s.autoRefreshRules = readRules().map((r) => ({ url: normalizeSiteUrl(r.raw) || r.raw, seconds: r.seconds }));
+  s.autoRefreshRules = readRules().map((r) => ({ url: normalizeSiteUrl(r.raw) || r.raw, seconds: r.seconds, mode: r.mode }));
   return s;
 }
 
 function fillForm(s) {
+  loadedSettings = s;
   for (const k of CHECKS) $(k).checked = !!s[k];
   for (const k of TEXTS) $(k).value = s[k];
   for (const k of NUMBERS) $(k).value = s[k];
@@ -131,22 +139,24 @@ function showStatus(text, cls) {
   $('status').textContent = text;
 }
 
-$('save').addEventListener('click', async () => {
+$('save').addEventListener('click', () => {
   const s = readForm();
-  // Sites other than SynXis need Chrome's permission; ask right away while the
-  // click still counts as the user's action.
+  const error = validate(s);
+  if (error) return showStatus(error, 'err');
+  s.folder = sanitizeFolder(s.folder);
+  // Saved right away: Chrome's permission prompt below may close the pop-up.
+  const next = { ...loadedSettings, ...s };
+  chrome.storage.local.set({ settings: next });
+  fillForm(next);
+  // Sites other than SynXis need Chrome's permission (asked while the click
+  // still counts as the user's action).
   const origins = s.autoRefreshEnabled
     ? [...new Set(s.autoRefreshRules.map((r) => normalizeSiteUrl(r.url)).filter((u) => u && !isSynxis(u)).map(originPattern))]
     : [];
-  const granted = origins.length ? chrome.permissions.request({ origins }) : Promise.resolve(true);
-
-  const error = validate(s);
-  if (error) return showStatus(error, 'err');
-  if (!(await granted)) return showStatus('Chrome permission is needed to refresh those websites.', 'err');
-  s.folder = sanitizeFolder(s.folder);
-  await saveSettings(s);
-  fillForm(await getSettings());
-  showStatus('Saved ✔', 'ok');
+  if (!origins.length) return showStatus('Saved ✔', 'ok');
+  chrome.permissions.request({ origins }).then((ok) => {
+    showStatus(ok ? 'Saved ✔' : 'Saved, but Chrome permission is needed to refresh those websites.', ok ? 'ok' : 'err');
+  });
 });
 
 document.addEventListener('input', updatePreview);
@@ -247,9 +257,12 @@ async function renderStatus() {
   $('statusDaily').textContent = dailyStatus(s, schedState);
 
   const sites = (s.autoRefreshRules || []).length;
+  const { countdowns = {} } = await chrome.storage.session.get('countdowns');
+  const dues = Object.values(countdowns);
   $('statusRefresh').textContent = s.autoRefreshEnabled
     ? `On for ${sites} website${sites === 1 ? '' : 's'}` +
-      (lastAutoRefresh ? ` · last refresh ${formatDateTime(lastAutoRefresh.at)}` : '')
+      (dues.length ? ` · next in ${badgeCountdown(Math.min(...dues) - Date.now())} sec` : '') +
+      (lastAutoRefresh ? ` · last ${formatDateTime(lastAutoRefresh.at)}` : '')
     : 'Off';
 }
 
@@ -260,7 +273,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     renderStatus();
   }
 });
-setInterval(renderStatus, 30000); // the daily status text depends on the time of day
+setInterval(renderStatus, 1000); // countdown and time-of-day dependent texts
 
 getSettings().then(fillForm);
 renderLogs();

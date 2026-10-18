@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SynXis Forecast Auto Downloader",
   "short_name": "Forecast Downloader",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Downloads the SynXis Property Hub Forecast report (Next Year) as CSV once a day or on demand, and auto-refreshes chosen sites after inactivity.",
   "minimum_chrome_version": "111",
   "permissions": [
@@ -24,7 +24,8 @@
     "type": "module"
   },
   "action": {
-    "default_title": "SynXis Forecast Downloader – Settings",
+    "default_title": "SynXis Forecast Downloader",
+    "default_popup": "options.html?popup=1",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
