@@ -267,41 +267,6 @@ async function waitForCriteria(ctx, timeoutMs) {
   return false;
 }
 
-// Home > SPH Dashboard, which makes the Reports menu open on the SPH reports.
-async function openSphDashboard(ctx) {
-  const start = Date.now();
-  let homeTries = 0;
-  let idle = 0;
-  while (Date.now() - start < 30000) {
-    const frames = await scanTab(ctx);
-    if (isCriteria(frames)) return 'criteria';
-    const dash = frames.find((f) => f.sphDashboard);
-    if (dash) {
-      const res = await actIn(ctx, dash, { action: 'clickSphDashboard' });
-      if (res.ok || res.reloaded) {
-        log('info', 'Clicked: SPH Dashboard');
-        await sleep(ctx, 1500);
-        await waitForTabComplete(ctx, ctx.mainTabId, 60000);
-        await sleep(ctx, 1500);
-        return 'done';
-      }
-    }
-    const home = frames.find((f) => f.homeNav);
-    if (home && homeTries < 3) {
-      const click = homeTries % 2 === 1; // hover first, then click
-      const res = await actIn(ctx, home, { action: 'openHome', click });
-      if (res.ok) log('info', `Clicked: Home menu (${click ? 'click' : 'hover'})`);
-      homeTries++;
-      await sleep(ctx, 1500);
-      continue;
-    }
-    if (++idle >= 3) break;
-    await sleep(ctx, 1500);
-  }
-  log('warn', '"SPH Dashboard" was not found under Home, continuing with Reports');
-  return 'skipped';
-}
-
 // Clicks through Reports > SynXis Property Hub (SPH) > Forecast on the current
 // page. Returns true once the Forecast page is showing.
 async function tryMenu(ctx, maxMs) {
@@ -315,6 +280,8 @@ async function tryMenu(ctx, maxMs) {
     const frames = await scanTab(ctx, { allowHidden });
     if (isCriteria(frames)) return true;
 
+    // Reports (top menu) > "SynXis Property Hub (SPH)" (3rd entry: Reports,
+    // Subscriptions, SynXis Property Hub (SPH)) > Forecast.
     const pick = (key) => frames.find((f) => f[key]);
     let acted = null;
     if (pick('forecastStrong')) {
@@ -322,11 +289,11 @@ async function tryMenu(ctx, maxMs) {
     } else if (pick('sphLink') && counts.sph < 3) {
       acted = { frame: pick('sphLink'), action: 'clickSPH', label: 'SynXis Property Hub (SPH)' };
       counts.sph++;
-    } else if (pick('forecastWeak') && counts.forecast < 3) {
+    } else if (pick('forecastWeak') && counts.sph > 0 && counts.forecast < 3) {
       acted = { frame: pick('forecastWeak'), action: 'clickForecast', label: 'Forecast' };
       counts.forecast++;
     } else if (pick('reportsNav') && counts.reports < 4) {
-      const click = counts.reports % 2 === 1; // hover first, then click
+      const click = counts.reports % 2 === 0; // click first; hover in case the menu opens on hover
       acted = { frame: pick('reportsNav'), action: 'openReports', click, label: `Reports menu (${click ? 'click' : 'hover'})` };
       counts.reports++;
     }
@@ -369,10 +336,6 @@ async function openForecastCriteria(ctx) {
   if (isCriteria(await scanTab(ctx))) {
     log('info', 'The Forecast report page is already open');
     return;
-  }
-  if (ctx.settings.openSphDashboard) {
-    await step(ctx, 'Home > SPH Dashboard');
-    if ((await openSphDashboard(ctx)) === 'criteria') return;
   }
   await step(ctx, 'Reports > SynXis Property Hub (SPH) > Forecast');
   if (await tryMenu(ctx, 60000)) return;
@@ -774,15 +737,62 @@ async function keepSessionAlive() {
   }
 }
 
+// ---------------------------------------------------------------- toolbar icon
+
+// One click on the extension icon starts the download (default). The popup is
+// used only when one-click mode is turned off in Settings.
+async function applyIconMode() {
+  const s = await getSettings();
+  await chrome.action.setPopup({ popup: s.oneClick ? '' : 'popup.html' });
+  await chrome.action.setTitle({
+    title: s.oneClick
+      ? 'Download SynXis Forecast now (right-click for settings)'
+      : 'SynXis Forecast Downloader',
+  });
+}
+
+function createIconMenu() {
+  chrome.contextMenus.removeAll(() => {
+    const items = [
+      ['run', 'Download Forecast now'],
+      ['cancel', 'Cancel the running download'],
+      ['lastFile', 'Show last downloaded file'],
+      ['settings', 'Settings, status & log'],
+    ];
+    for (const [id, title] of items) chrome.contextMenus.create({ id, title, contexts: ['action'] });
+  });
+}
+
+function runFromIcon() {
+  const res = startRun('manual');
+  if (!res.started) notify('Forecast download', res.reason);
+}
+
+chrome.action.onClicked.addListener(runFromIcon);
+
+chrome.contextMenus.onClicked.addListener(async (info) => {
+  if (info.menuItemId === 'run') runFromIcon();
+  else if (info.menuItemId === 'cancel') {
+    if (currentCtx) currentCtx.aborted = 'Cancelled by user';
+  } else if (info.menuItemId === 'settings') chrome.runtime.openOptionsPage();
+  else if (info.menuItemId === 'lastFile') {
+    const { lastSuccess } = await chrome.storage.local.get('lastSuccess');
+    if (lastSuccess && lastSuccess.downloadId) chrome.downloads.show(lastSuccess.downloadId);
+    else chrome.downloads.showDefaultFolder();
+  }
+});
+
 // ---------------------------------------------------------------- events
 
 chrome.runtime.onInstalled.addListener(async () => {
+  createIconMenu();
   const s = await getSettings();
   await allowPopupsFor(new URL(s.startUrl).origin);
   await ensureAlarms();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
+  await applyIconMode();
   await ensureAlarms();
   // Give Chrome and the network a minute before a catch-up run.
   await chrome.alarms.create(ALARM_STARTUP, { when: Date.now() + 60000 });
@@ -804,6 +814,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes.settings) return;
   ensureAlarms();
+  applyIconMode();
   const s = changes.settings.newValue;
   if (s && s.startUrl) allowPopupsFor(new URL(s.startUrl).origin);
 });
@@ -832,3 +843,4 @@ chrome.storage.local.get('runStatus').then(({ runStatus }) => {
   }
 });
 ensureAlarms();
+applyIconMode();

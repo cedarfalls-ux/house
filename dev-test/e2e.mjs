@@ -191,7 +191,7 @@ check('[no tab open] run succeeds', run.ok, run.ok ? run.path : run.error);
 check('[no tab open] exact Forecast / Next Year CSV saved in Downloads/SynXis Forecast', isExpected(file));
 check('[no tab open] opened its own tab', (await logsSince(t0)).includes('No SynXis tab was open'));
 check('[no tab open] answered NO to the "open a Bank?" pop-up', (await logsSince(t0)).includes('Closed the "open a Bank?" pop-up'));
-check('[no tab open] went through Home > SPH Dashboard', (await logsSince(t0)).includes('Clicked: SPH Dashboard'));
+check('[no tab open] went Reports > SynXis Property Hub (SPH) > Forecast', /Reports menu[\s\S]*SynXis Property Hub \(SPH\)[\s\S]*Clicked: Forecast/.test(await logsSince(t0)));
 check('[no tab open] its tab and the report pop-up are closed', (await synxisPages()).length === 0);
 
 // 3. SynXis tab already open -> the whole run happens in that tab, which stays open
@@ -201,11 +201,11 @@ const resetExisting = async () => {
   await sleep(1500);
 };
 let n = 0;
-for (const [label, cookies, sphDash] of [
-  ['html export', { rvmode: 'html', menumode: 'js' }, true],
-  ['click export', { rvmode: 'click' }, true],
-  ['css-hover menu', { rvmode: 'sys', menumode: 'css' }, false],
-  ['closed shadow-DOM menu', { menumode: 'shadow' }, true],
+for (const [label, cookies] of [
+  ['html export', { rvmode: 'html', menumode: 'js' }],
+  ['click export', { rvmode: 'click' }],
+  ['css-hover menu', { rvmode: 'sys', menumode: 'css' }],
+  ['closed shadow-DOM menu', { menumode: 'shadow' }],
 ]) {
   await setCookies(cookies);
   await resetExisting();
@@ -236,13 +236,26 @@ for (const [label, cookies, sphDash] of [
   check(`[${label}] report pop-up closed`, (await reportPages()).length === 0);
   const runLog = await logsSince(t0);
   check(`[${label}] answered NO to the "open a Bank?" pop-up`, runLog.includes('Closed the "open a Bank?" pop-up'));
-  if (sphDash) {
-    check(`[${label}] went through Home > SPH Dashboard`, runLog.includes('Clicked: SPH Dashboard') && pages[0]?.url.includes('dash=sph'), pages[0]?.url);
-  }
+  const footerClicked = await evaluate(existing.sessionId, 'window.footerClicked');
+  // (A CSS-hover-only menu never opens for scripts; the hidden Forecast link is used there.)
+  const sphClicked = label.startsWith('css') || runLog.includes('Clicked: SynXis Property Hub (SPH)');
+  check(
+    `[${label}] clicked the menu's "SynXis Property Hub (SPH)", never the footer version text, no Home step`,
+    sphClicked && footerClicked === false && !runLog.includes('Home'),
+    `footerClicked=${footerClicked}`,
+  );
   const bannerText = await evaluate(existing.sessionId, `document.getElementById('sfd-banner')?.textContent || ''`);
   check(`[${label}] on-screen banner shows the result`, run.ok ? bannerText.includes('saved') : bannerText.includes('✖'), bannerText);
   if (!run.ok || label.includes('shadow')) console.log(`\n  Log of ${label} run:\n${runLog}\n`);
 }
+
+// One click on the toolbar icon runs the download (no popup); the popup comes back when turned off
+check('One-click icon: no popup by default', (await evaluate(ui.sessionId, 'chrome.action.getPopup({})')) === '');
+await setSettings({ oneClick: false });
+await sleep(800);
+check('One-click off: icon opens the status popup', (await evaluate(ui.sessionId, 'chrome.action.getPopup({})')).endsWith('/popup.html'));
+await setSettings({ oneClick: true });
+await sleep(800);
 
 // 4. "Remember from open SynXis tab" saves the Forecast page address (tab is on Forecast now)
 const learned = await message({ type: 'learnForecast' });

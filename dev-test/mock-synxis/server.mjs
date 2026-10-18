@@ -62,9 +62,9 @@ function dashboard(menuMode, { bankPopup, sphDash }) {
 <div id="mega">
   <div class="left">
     <h3>Reports</h3>
-    <div data-p="classic"${sphDash ? '' : ' class="sel"'}>Reports <span>&rarr;</span></div>
+    <div data-p="classic"${sphDash ? '' : ' class="sel"'}>Reports <i class="material-icons">arrow_back</i></div>
     <div data-p="subs">Subscriptions</div>
-    <div data-p="sph"${sphDash ? ' class="sel"' : ''}><span>SynXis Property Hub (SPH)</span></div>
+    <div data-p="sph"${sphDash ? ' class="sel"' : ''}>SynXis Property Hub (SPH) <i class="material-icons">arrow_forward</i></div>
   </div>
   <div class="panel${sphDash ? '' : ' show'}" id="p-classic"><b>Classic</b>
     <a href="javascript:void(0)" data-r="decoy">Forecast</a>
@@ -99,7 +99,10 @@ ${bankPopup ? `<div id="bankModal" style="position:fixed;inset:0;background:rgba
     <div><b>You do not have a Bank open</b><div>Would you like to open a Bank?</div></div>
     <button id="bankNo">NO</button> <button id="bankYes">YES</button></div></div>` : ''}
 <iframe id="content" src="about:blank"></iframe>
+<footer>&copy; 2026 Aven Hospitality. All rights reserved. <a href="javascript:void(0)" id="ver">SynXis Property Hub 4.30.0.0.</a></footer>
 <script>
+  window.footerClicked = false;
+  document.getElementById('ver').addEventListener('click', () => { window.footerClicked = true; });
   const mode = ${JSON.stringify(menuMode || 'js')};
   window.bankOpen = false;
   const modal = document.getElementById('bankModal');

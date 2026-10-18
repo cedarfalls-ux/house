@@ -13,6 +13,17 @@
 
     <div class="page">
       <div class="card">
+        <h2>Status</h2>
+        <div id="statusRunning" class="row hidden" style="margin-bottom: 8px">
+          <span class="spinner"></span><b>Running:</b> <span id="statusStep"></span>
+          <button class="btn danger" id="cancelRun">Cancel</button>
+        </div>
+        <div><b>Last run:</b> <span id="statusLast">Never</span></div>
+        <div id="statusPath" class="path hidden" style="margin-top: 4px"></div>
+        <div style="margin-top: 4px"><b>Next automatic run:</b> <span id="statusNext">—</span></div>
+      </div>
+
+      <div class="card">
         <h2>Automatic daily download</h2>
         <label class="check">
           <input type="checkbox" id="scheduleEnabled" />
@@ -93,10 +104,6 @@
           <input type="url" id="startUrl" />
           <div class="help">Change only if your Control Center address is different.</div>
         </div>
-        <label class="check">
-          <input type="checkbox" id="openSphDashboard" />
-          <span>First go to <b>Home &gt; SPH Dashboard</b>, then Reports &gt; SynXis Property Hub (SPH) &gt; Forecast</span>
-        </label>
         <div class="field">
           <label for="forecastUrl">Forecast page address (backup)</label>
           <input type="url" id="forecastUrl" placeholder="Optional" />
@@ -114,6 +121,13 @@
 
       <div class="card">
         <h2>Other</h2>
+        <label class="check">
+          <input type="checkbox" id="oneClick" />
+          <span
+            ><b>One click:</b> clicking the extension icon starts the download right away (right-click the icon for
+            settings, last file or cancel). Turn off to show the small status window instead.</span
+          >
+        </label>
         <label class="check">
           <input type="checkbox" id="notifications" />
           <span>Show a notification when a download succeeds or fails</span>

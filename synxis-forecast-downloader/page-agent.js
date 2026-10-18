@@ -243,12 +243,6 @@ export function pageAgent(cmd, args) {
     return byTop(findText((t) => t === word, { visibleOnly }).filter(usable));
   }
 
-  function sphDashboardLinks() {
-    return findText(
-      (t) => t.length < 60 && t.includes('dashboard') && (/\bsph\b/.test(t) || t.includes('property hub')),
-    ).filter(usable);
-  }
-
   function forecastLinks(visibleOnly) {
     const els = findText((t) => t === 'forecast', { visibleOnly }).filter(usable);
     // "Strong" = the Forecast link sitting in the SPH Front Office list, next to
@@ -269,8 +263,21 @@ export function pageAgent(cmd, args) {
     return { strong, weak: els };
   }
 
+  // Exactly the "SynXis Property Hub (SPH)" entry of the Reports menu (the one listed
+  // with "Reports" and "Subscriptions"), never the "SynXis Property Hub 4.30.0.0"
+  // version text in the page footer. An icon after the label is allowed.
   function sphLinks(visibleOnly) {
-    return findText((t) => t.startsWith('synxis property hub') && t.length < 60, { visibleOnly }).filter(usable);
+    const els = findText((t) => t.startsWith('synxis property hub (sph)') && t.length < 60, { visibleOnly }).filter(
+      usable,
+    );
+    const subscriptions = findText((t) => t === 'subscriptions', { visibleOnly });
+    const inMenu = els.filter((el) => {
+      for (let n = parentOf(el), i = 0; n && i < 5; n = parentOf(n), i++) {
+        if (subscriptions.some((x) => deepContains(n, x))) return true;
+      }
+      return false;
+    });
+    return inMenu.length ? inMenu : els;
   }
 
   function generateButtons() {
@@ -290,8 +297,6 @@ export function pageAgent(cmd, args) {
       rangeSelected: sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.trim() : null,
       rangeOptions: sel ? [...sel.options].map((o) => o.text.trim()) : null,
       generateBtn: generateButtons().length > 0,
-      homeNav: topNav('home', true).length > 0,
-      sphDashboard: sphDashboardLinks().length > 0,
       forecastStrong: fc.strong.length > 0,
       forecastWeak: fc.weak.length > 0,
       sphLink: sphLinks(!hidden).length > 0,
@@ -309,14 +314,6 @@ export function pageAgent(cmd, args) {
     switch (args.action) {
       case 'dismissBank':
         return run(bankPopupNo(), '"NO" button of the Bank pop-up', { pause: 500 });
-      case 'openHome': {
-        const el = topNav('home', true)[0];
-        return run(el && clickTarget(el), 'Home menu', { hoverOnly: !args.click });
-      }
-      case 'clickSphDashboard': {
-        const el = sphDashboardLinks()[0];
-        return run(el && clickTarget(el), 'SPH Dashboard');
-      }
       case 'openReports': {
         const el = topNav('reports', !hidden)[0];
         return run(el && clickTarget(el), 'Reports menu', { hoverOnly: !args.click });
@@ -475,6 +472,7 @@ export function pageAgent(cmd, args) {
     const keys = {
       reports: (t) => t === 'reports',
       sph: (t) => t.startsWith('synxis property hub'),
+      subscriptions: (t) => t === 'subscriptions',
       forecast: (t) => t === 'forecast',
       forecastBy: (t) => t.startsWith('forecast by'),
       generate: (t) => t === 'generate report' || t === 'generate',

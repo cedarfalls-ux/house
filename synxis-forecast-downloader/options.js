@@ -14,7 +14,7 @@ const $ = (id) => document.getElementById(id);
 const CHECKS = [
   'scheduleEnabled',
   'catchUpIfMissed',
-  'openSphDashboard',
+  'oneClick',
   'notifications',
   'keepSessionAlive',
   'keepWindowOnFailure',
@@ -143,9 +143,36 @@ $('copyLogs').addEventListener('click', async () => {
   showStatus('Log copied', 'ok');
 });
 
+const TRIGGERS = { manual: 'manual', scheduled: 'scheduled', retry: 'scheduled retry', 'catch-up': 'catch-up' };
+
+async function renderStatus() {
+  const s = await getSettings();
+  const { runStatus, lastRun, nextRunAt } = await chrome.storage.local.get(['runStatus', 'lastRun', 'nextRunAt']);
+  const running = !!(runStatus && runStatus.running);
+  $('statusRunning').classList.toggle('hidden', !running);
+  $('statusStep').textContent = running ? runStatus.step || '' : '';
+  const last = $('statusLast');
+  if (!lastRun) {
+    last.className = 'muted';
+    last.textContent = 'Never';
+  } else {
+    last.className = lastRun.ok ? 'ok' : 'err';
+    const when = `${formatDateTime(lastRun.at)} (${TRIGGERS[lastRun.trigger] || lastRun.trigger})`;
+    last.textContent = lastRun.ok ? `✔ ${when}` : `✖ ${when} – ${lastRun.error}`;
+  }
+  $('statusPath').classList.toggle('hidden', !(lastRun && lastRun.ok));
+  $('statusPath').textContent = lastRun && lastRun.ok ? lastRun.path : '';
+  $('statusNext').textContent = s.scheduleEnabled ? formatDateTime(nextRunAt) : 'turned off';
+}
+
+$('cancelRun').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'cancelRun' }));
+
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.logs) renderLogs();
+  if (area !== 'local') return;
+  if (changes.logs) renderLogs();
+  if (changes.runStatus || changes.lastRun || changes.nextRunAt || changes.settings) renderStatus();
 });
 
 getSettings().then(fillForm);
 renderLogs();
+renderStatus();

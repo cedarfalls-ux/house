@@ -5,6 +5,10 @@ Downloads the **SynXis Property Hub → Front Office → Forecast** report with
 12 AM and 6 AM, or whenever you click **Download Forecast now**. The file goes
 into a folder you choose.
 
+**One click:** click the extension icon once and the whole thing runs by itself.
+Right-click the icon for *Settings, status & log*, *Show last downloaded file*
+and *Cancel the running download*.
+
 What it does, step by step, just like you would by hand, and you can watch it
 happen (each button gets an orange outline just before it is clicked, and a
 banner at the bottom of the page shows the current step):
@@ -13,13 +17,15 @@ banner at the bottom of the page shows the current step):
    SynXis tab is open, and closes that tab again at the end)
 2. If **"You do not have a Bank open – Would you like to open a Bank?"** shows
    up (it can appear after every refresh), clicks **NO**
-3. **Home** → **SPH Dashboard**
-4. **Reports** → **SynXis Property Hub (SPH)** → **Forecast**
-5. **Date Range** dropdown → **Next Year**
-6. **GENERATE REPORT**
-7. In the report pop-up: **Export → CSV (comma delimited)**
-8. Saves the file as `Downloads\SynXis Forecast\Forecast_NextYear_2026-10-18.csv`
-9. Closes the report pop-up. Your SynXis tab stays open on the Forecast page.
+3. **Reports** (top menu) → in the menu's list *Reports / Subscriptions /
+   SynXis Property Hub (SPH)* clicks the 3rd one, **SynXis Property Hub (SPH)**
+   (never the "SynXis Property Hub 4.30.0.0" version text in the page footer)
+   → **Forecast**
+4. **Date Range** dropdown → **Next Year**
+5. **GENERATE REPORT**
+6. In the report pop-up: **Export → CSV (comma delimited)**
+7. Saves the file as `Downloads\SynXis Forecast\Forecast_NextYear_2026-10-18.csv`
+8. Closes the report pop-up. Your SynXis tab stays open on the Forecast page.
 
 It only treats a page as the Forecast page when it shows **both** the Date Range
 dropdown and the Generate Report button (the dashboard has other dropdowns that
@@ -39,9 +45,9 @@ address** (see Settings → Report) if you saved one.
 4. Click **Load unpacked** and select the `synxis-forecast-downloader` folder.
 5. Click the puzzle icon in the toolbar and **pin** "SynXis Forecast Auto Downloader".
 6. Log in to SynXis in this same Chrome profile (select the right hotel).
-7. Click the extension icon → **Download Forecast now** to test it. Your SynXis
-   tab does everything by itself; the report pop-up opens and closes. The popup
-   shows where the file was saved.
+7. Click the extension icon once to test it. Your SynXis tab does everything by
+   itself; the report pop-up opens and closes, and a green banner shows where
+   the file was saved.
 
 **Updating to a new version:** replace the files in the folder, then click the
 reload (↻) button on the extension in `chrome://extensions`.
@@ -58,7 +64,7 @@ reload (↻) button on the extension in `chrome://extensions`.
 | File name | `Forecast_{range}_{date}` | Tokens: `{date}` `{time}` `{range}` `{YYYY}` `{MM}` `{DD}` `{HH}` `{mm}` |
 | If file exists | Keep both | Or **Replace** (e.g. file name `Forecast_latest` + Replace = always one up-to-date file) |
 | Date Range | Next Year | Any value from the SynXis dropdown |
-| Home > SPH Dashboard first | On | Turn off if your SynXis has no SPH Dashboard under Home |
+| One click | On | Icon click starts the download. Off = icon opens a small status window with a Download button |
 | Forecast page address (backup) | empty | Open the Forecast report in SynXis, then click **Remember from open SynXis tab** |
 
 ### Saving on another drive (e.g. `D:\Reports`)
