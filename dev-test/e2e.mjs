@@ -183,13 +183,15 @@ check('Not logged in: run fails with a login message', !run.ok && /not logged in
 check('Not logged in: the tab it opened is closed again', (await synxisPages()).length === 0);
 
 // 2. Logged in, no SynXis tab open -> opens one tab (not a window), downloads, closes it
-await setCookies({ sess: '1', rvmode: 'sys', menumode: 'js' });
+await setCookies({ sess: '1', rvmode: 'sys', menumode: 'js', bankpopup: '1' });
 t0 = Date.now();
 run = await runFromPopup();
 let file = path.join(folder, `Forecast_NextYear_${dateKey}.csv`);
 check('[no tab open] run succeeds', run.ok, run.ok ? run.path : run.error);
 check('[no tab open] exact Forecast / Next Year CSV saved in Downloads/SynXis Forecast', isExpected(file));
 check('[no tab open] opened its own tab', (await logsSince(t0)).includes('No SynXis tab was open'));
+check('[no tab open] answered NO to the "open a Bank?" pop-up', (await logsSince(t0)).includes('Closed the "open a Bank?" pop-up'));
+check('[no tab open] went through Home > SPH Dashboard', (await logsSince(t0)).includes('Clicked: SPH Dashboard'));
 check('[no tab open] its tab and the report pop-up are closed', (await synxisPages()).length === 0);
 
 // 3. SynXis tab already open -> the whole run happens in that tab, which stays open
@@ -199,16 +201,27 @@ const resetExisting = async () => {
   await sleep(1500);
 };
 let n = 0;
-for (const [label, cookies] of [
-  ['html export', { rvmode: 'html', menumode: 'js' }],
-  ['click export', { rvmode: 'click' }],
-  ['css-hover menu', { rvmode: 'sys', menumode: 'css' }],
-  ['closed shadow-DOM menu', { menumode: 'shadow' }],
+for (const [label, cookies, sphDash] of [
+  ['html export', { rvmode: 'html', menumode: 'js' }, true],
+  ['click export', { rvmode: 'click' }, true],
+  ['css-hover menu', { rvmode: 'sys', menumode: 'css' }, false],
+  ['closed shadow-DOM menu', { menumode: 'shadow' }, true],
 ]) {
   await setCookies(cookies);
   await resetExisting();
   t0 = Date.now();
+  // Screenshots of the SynXis tab while the first run works, to check what the user sees.
+  let shooting = n === 0;
+  const shots = (async () => {
+    for (let i = 0; shooting; i++) {
+      const shot = await send('Page.captureScreenshot', { format: 'png' }, existing.sessionId).catch(() => null);
+      if (shot) fs.writeFileSync(path.join(work, `run-${String(i).padStart(2, '0')}.png`), Buffer.from(shot.data, 'base64'));
+      await sleep(700);
+    }
+  })();
   run = await runFromPopup();
+  shooting = false;
+  await shots;
   file = path.join(folder, `Forecast_NextYear_${dateKey} (${++n}).csv`);
   const pages = await synxisPages();
   const frameSrc = await evaluate(existing.sessionId, `document.getElementById('content').src`).catch(() => '');
@@ -221,7 +234,14 @@ for (const [label, cookies] of [
     pages.map((p) => p.url).join(', '),
   );
   check(`[${label}] report pop-up closed`, (await reportPages()).length === 0);
-  if (!run.ok || label.includes('shadow')) console.log(`\n  Log of ${label} run:\n${await logsSince(t0)}\n`);
+  const runLog = await logsSince(t0);
+  check(`[${label}] answered NO to the "open a Bank?" pop-up`, runLog.includes('Closed the "open a Bank?" pop-up'));
+  if (sphDash) {
+    check(`[${label}] went through Home > SPH Dashboard`, runLog.includes('Clicked: SPH Dashboard') && pages[0]?.url.includes('dash=sph'), pages[0]?.url);
+  }
+  const bannerText = await evaluate(existing.sessionId, `document.getElementById('sfd-banner')?.textContent || ''`);
+  check(`[${label}] on-screen banner shows the result`, run.ok ? bannerText.includes('saved') : bannerText.includes('✖'), bannerText);
+  if (!run.ok || label.includes('shadow')) console.log(`\n  Log of ${label} run:\n${runLog}\n`);
 }
 
 // 4. "Remember from open SynXis tab" saves the Forecast page address (tab is on Forecast now)

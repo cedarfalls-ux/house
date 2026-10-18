@@ -46,8 +46,21 @@ async function setRunStatus(patch) {
 
 async function step(ctx, text) {
   checkAbort(ctx);
+  ctx.stepNo = (ctx.stepNo || 0) + 1;
   log('info', text);
   await setRunStatus({ step: text });
+  ctx.bannerText = `Step ${ctx.stepNo}: ${text}…`;
+  await showBanner(ctx, ctx.bannerText);
+}
+
+// Status banner on the SynXis page(s) so the user can follow along.
+async function showBanner(ctx, text, state = 'run', hideAfterMs = 0) {
+  const tabIds = [ctx.mainTabId, ...(ctx.reportTabIds || [])].filter(Boolean);
+  for (const tabId of tabIds) {
+    await chrome.scripting
+      .executeScript({ target: { tabId, frameIds: [0] }, func: pageAgent, args: ['banner', { text, state, hideAfterMs }] })
+      .catch(() => {});
+  }
 }
 
 function setBadge(text, color) {
@@ -208,22 +221,90 @@ async function navigate(ctx, url) {
   await assertOnSite(ctx, ctx.mainTabId);
 }
 
+async function actIn(ctx, frame, args) {
+  try {
+    const [res] = await runAgent(ctx.mainTabId, 'act', args, [frame.frameId]);
+    // No answer usually means the click/selection reloaded the page.
+    return res || { ok: false, reloaded: true, error: 'the page reloaded' };
+  } catch (e) {
+    return { ok: false, reloaded: true, error: e.message };
+  }
+}
+
+// Looks at every frame of the SynXis tab. Stops on a login page and answers NO
+// to the "You do not have a Bank open" pop-up whenever it shows up.
+async function scanTab(ctx, opts = {}) {
+  const tabId = ctx.mainTabId;
+  await assertOnSite(ctx, tabId);
+  if (ctx.bannerText) {
+    // Put the status banner back after a page reload.
+    await chrome.scripting
+      .executeScript({ target: { tabId, frameIds: [0] }, func: pageAgent, args: ['banner', { text: ctx.bannerText }] })
+      .catch(() => {});
+  }
+  const args = { range: ctx.settings.dateRange, ...opts };
+  let frames = await safeAgent(tabId, 'scan', args);
+  if (frames.some((f) => f.loginForm)) throw new LoginRequiredError('login form shown');
+  const bank = frames.find((f) => f.bankPopup);
+  if (bank) {
+    const res = await actIn(ctx, bank, { action: 'dismissBank' });
+    log(res.ok ? 'info' : 'warn', res.ok ? 'Closed the "open a Bank?" pop-up (clicked NO)' : res.error);
+    await sleep(ctx, 1500);
+    frames = await safeAgent(tabId, 'scan', args);
+  }
+  return frames;
+}
+
+// The Forecast page: a visible Date Range dropdown and a Generate Report button.
+const isCriteria = (frames) => frames.some((f) => f.rangeSelect) && frames.some((f) => f.generateBtn);
+
 async function waitForCriteria(ctx, timeoutMs) {
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
-    const frames = await safeAgent(ctx.mainTabId, 'scan', { range: ctx.settings.dateRange });
-    if (frames.some((f) => f.loginForm)) throw new LoginRequiredError('login form shown');
-    if (frames.some((f) => f.rangeSelect)) return true;
+    if (isCriteria(await scanTab(ctx))) return true;
     await sleep(ctx, 1000);
   }
   return false;
 }
 
+// Home > SPH Dashboard, which makes the Reports menu open on the SPH reports.
+async function openSphDashboard(ctx) {
+  const start = Date.now();
+  let homeTries = 0;
+  let idle = 0;
+  while (Date.now() - start < 30000) {
+    const frames = await scanTab(ctx);
+    if (isCriteria(frames)) return 'criteria';
+    const dash = frames.find((f) => f.sphDashboard);
+    if (dash) {
+      const res = await actIn(ctx, dash, { action: 'clickSphDashboard' });
+      if (res.ok || res.reloaded) {
+        log('info', 'Clicked: SPH Dashboard');
+        await sleep(ctx, 1500);
+        await waitForTabComplete(ctx, ctx.mainTabId, 60000);
+        await sleep(ctx, 1500);
+        return 'done';
+      }
+    }
+    const home = frames.find((f) => f.homeNav);
+    if (home && homeTries < 3) {
+      const click = homeTries % 2 === 1; // hover first, then click
+      const res = await actIn(ctx, home, { action: 'openHome', click });
+      if (res.ok) log('info', `Clicked: Home menu (${click ? 'click' : 'hover'})`);
+      homeTries++;
+      await sleep(ctx, 1500);
+      continue;
+    }
+    if (++idle >= 3) break;
+    await sleep(ctx, 1500);
+  }
+  log('warn', '"SPH Dashboard" was not found under Home, continuing with Reports');
+  return 'skipped';
+}
+
 // Clicks through Reports > SynXis Property Hub (SPH) > Forecast on the current
-// page. Returns true once the Forecast page (Date Range dropdown) is showing.
+// page. Returns true once the Forecast page is showing.
 async function tryMenu(ctx, maxMs) {
-  const tabId = ctx.mainTabId;
-  const range = ctx.settings.dateRange;
   const start = Date.now();
   const counts = { reports: 0, sph: 0, forecast: 0 };
   let allowHidden = false;
@@ -231,10 +312,8 @@ async function tryMenu(ctx, maxMs) {
 
   while (Date.now() - start < maxMs) {
     checkAbort(ctx);
-    await assertOnSite(ctx, tabId);
-    const frames = await safeAgent(tabId, 'scan', { range, allowHidden });
-    if (frames.some((f) => f.loginForm)) throw new LoginRequiredError('login form shown');
-    if (frames.some((f) => f.rangeSelect)) return true;
+    const frames = await scanTab(ctx, { allowHidden });
+    if (isCriteria(frames)) return true;
 
     const pick = (key) => frames.find((f) => f[key]);
     let acted = null;
@@ -267,31 +346,35 @@ async function tryMenu(ctx, maxMs) {
     }
     idle = 0;
 
-    let res;
-    try {
-      [res] = await runAgent(
-        tabId,
-        'act',
-        { action: acted.action, click: acted.click, strongOnly: acted.strongOnly, allowHidden },
-        [acted.frame.frameId],
-      );
-    } catch (e) {
-      res = { ok: false, error: e.message };
-    }
-    if (res && res.ok) log('info', `Clicked: ${acted.label}`);
-    else log('warn', `Could not click ${acted.label}: ${res ? res.error : 'frame not ready'}`);
+    const res = await actIn(ctx, acted.frame, {
+      action: acted.action,
+      click: acted.click,
+      strongOnly: acted.strongOnly,
+      allowHidden,
+    });
+    if (res.ok || res.reloaded) log('info', `Clicked: ${acted.label}`);
+    else log('warn', `Could not click ${acted.label}: ${res.error}`);
 
     if (acted.action === 'clickForecast') {
       // Give the report page time to load before trying anything else.
       if (await waitForCriteria(ctx, 15000)) return true;
     } else {
-      await sleep(ctx, 1500);
+      await sleep(ctx, 1200);
     }
   }
   return false;
 }
 
 async function openForecastCriteria(ctx) {
+  if (isCriteria(await scanTab(ctx))) {
+    log('info', 'The Forecast report page is already open');
+    return;
+  }
+  if (ctx.settings.openSphDashboard) {
+    await step(ctx, 'Home > SPH Dashboard');
+    if ((await openSphDashboard(ctx)) === 'criteria') return;
+  }
+  await step(ctx, 'Reports > SynXis Property Hub (SPH) > Forecast');
   if (await tryMenu(ctx, 60000)) return;
   if (!ctx.freshPage) {
     log('warn', 'Reports menu not found on the current page, opening the SynXis home page');
@@ -310,22 +393,22 @@ async function openForecastCriteria(ctx) {
 }
 
 async function selectDateRange(ctx) {
-  const tabId = ctx.mainTabId;
   const range = ctx.settings.dateRange;
   for (let i = 0; i < 5; i++) {
-    const frames = await safeAgent(tabId, 'scan', { range });
-    const crit = frames.find((f) => f.rangeSelect);
+    const frames = await scanTab(ctx);
+    const crit = frames.find((f) => f.rangeSelect && f.rangeLabelled) || frames.find((f) => f.rangeSelect);
     if (!crit) {
       await sleep(ctx, 1500);
       continue;
     }
     if ((crit.rangeSelected || '').toLowerCase() === range.toLowerCase()) {
       log('info', `Date Range is set to "${crit.rangeSelected}"`);
+      await sleep(ctx, 800);
       return;
     }
-    const [res] = await runAgent(tabId, 'act', { action: 'selectRange', range }, [crit.frameId]);
-    if (res && !res.ok) throw new Error(`${res.error}. Available: ${(crit.rangeOptions || []).join(', ')}`);
-    await sleep(ctx, 2500); // a post-back may reload the page
+    const res = await actIn(ctx, crit, { action: 'selectRange', range });
+    if (!res.ok && !res.reloaded) throw new Error(`${res.error}. Available: ${(crit.rangeOptions || []).join(', ')}`);
+    await sleep(ctx, 2500); // a post-back may reload the page; the next loop checks the value
   }
   throw new Error(`Could not set Date Range to "${range}"`);
 }
@@ -335,14 +418,14 @@ async function generateReport(ctx) {
   let gen = null;
   const end = Date.now() + 20000;
   while (!gen && Date.now() < end) {
-    gen = (await safeAgent(tabId, 'scan', { range: ctx.settings.dateRange })).find((f) => f.generateBtn);
+    gen = (await scanTab(ctx)).find((f) => f.generateBtn);
     if (!gen) await sleep(ctx, 1000);
   }
-  if (!gen) throw new Error('"Generate Report" button not found');
+  if (!gen) throw new Error('"Generate Report" button not found on the Forecast page');
 
   const before = new Set((await chrome.tabs.query({})).map((t) => t.id));
-  const [res] = await runAgent(tabId, 'act', { action: 'clickGenerate' }, [gen.frameId]);
-  if (res && !res.ok) throw new Error(res.error);
+  const res = await actIn(ctx, gen, { action: 'clickGenerate' });
+  if (!res.ok && !res.reloaded) throw new Error(res.error);
   log('info', 'Clicked: Generate Report');
 
   const deadline = Date.now() + 60000;
@@ -491,23 +574,25 @@ async function doRun(ctx) {
   const { settings } = ctx;
   await allowPopupsFor(ctx.origin);
 
-  await step(ctx, 'Opening SynXis Control Center');
+  log('info', 'Opening SynXis Control Center');
   await prepareTab(ctx);
   await assertOnSite(ctx, ctx.mainTabId);
 
-  await step(ctx, 'Opening Reports > SynXis Property Hub (SPH) > Forecast');
   await openForecastCriteria(ctx);
 
-  await step(ctx, `Selecting Date Range "${settings.dateRange}"`);
+  await step(ctx, `Date Range > ${settings.dateRange}`);
   await selectDateRange(ctx);
 
-  await step(ctx, 'Generating report');
+  await step(ctx, 'Generate Report');
   const reportTabId = await generateReport(ctx);
 
   await step(ctx, 'Waiting for the report to load');
   const viewer = await waitForReport(ctx, reportTabId);
 
-  await step(ctx, 'Downloading CSV');
+  await step(ctx, 'Export > CSV (comma delimited)');
+  await chrome.scripting
+    .executeScript({ target: { tabId: reportTabId, allFrames: true }, func: pageAgent, args: ['act', { action: 'showExport' }] })
+    .catch(() => {});
   return exportCsv(ctx, reportTabId, viewer);
 }
 
@@ -546,6 +631,7 @@ async function runFlow(trigger) {
     await chrome.storage.local.set({ lastRun, lastSuccess: lastRun });
     if (scheduled) await recordAttempt(() => ({ success: true }));
     log('info', `Saved: ${saved.path}`);
+    await showBanner({ mainTabId: ctx.mainTabId }, `✔ Forecast CSV saved: ${saved.path}`, 'ok', 12000);
     setBadge('', null);
     notify('Forecast report downloaded', saved.path);
   } catch (err) {
@@ -553,6 +639,7 @@ async function runFlow(trigger) {
     const message = (err && err.message) || String(err);
     await chrome.storage.local.set({ lastRun: { ok: false, at: Date.now(), trigger, error: message } });
     log('error', `Run failed: ${message}`);
+    await showBanner(ctx, `✖ ${message}`, 'err', 30000);
     setBadge('!', '#d93025');
     notify('Forecast download failed', message);
     const tabs = await collectDiagnostic([ctx.mainTabId, ...ctx.reportTabIds].filter(Boolean));
@@ -621,8 +708,8 @@ async function learnForecastUrl() {
   const tabs = await chrome.tabs.query({ url: `${new URL(s.startUrl).origin}/*` });
   for (const t of tabs) {
     const frames = await runAgent(t.id, 'scan', { range: s.dateRange }).catch(() => []);
-    const crit = frames.find((f) => f.rangeSelect);
-    if (!crit) continue;
+    if (!isCriteria(frames)) continue;
+    const crit = frames.find((f) => f.rangeSelect && f.rangeLabelled) || frames.find((f) => f.rangeSelect);
     const strip = (u) => u.split('#')[0];
     if (strip(crit.url) === strip(s.startUrl) && !crit.url.includes('#')) {
       return {

@@ -5,16 +5,25 @@ Downloads the **SynXis Property Hub → Front Office → Forecast** report with
 12 AM and 6 AM, or whenever you click **Download Forecast now**. The file goes
 into a folder you choose.
 
-What it does, step by step, just like you would by hand:
+What it does, step by step, just like you would by hand, and you can watch it
+happen (each button gets an orange outline just before it is clicked, and a
+banner at the bottom of the page shows the current step):
 
 1. Uses the **SynXis tab you already have open** (it opens a new tab only if no
    SynXis tab is open, and closes that tab again at the end)
-2. **Reports** → **SynXis Property Hub (SPH)** → **Forecast**
-3. **Date Range** dropdown → **Next Year**
-4. **GENERATE REPORT**
-5. In the report pop-up: **Export → CSV (comma delimited)**
-6. Saves the file as `Downloads\SynXis Forecast\Forecast_NextYear_2026-10-18.csv`
-7. Closes the report pop-up. Your SynXis tab stays open on the Forecast page.
+2. If **"You do not have a Bank open – Would you like to open a Bank?"** shows
+   up (it can appear after every refresh), clicks **NO**
+3. **Home** → **SPH Dashboard**
+4. **Reports** → **SynXis Property Hub (SPH)** → **Forecast**
+5. **Date Range** dropdown → **Next Year**
+6. **GENERATE REPORT**
+7. In the report pop-up: **Export → CSV (comma delimited)**
+8. Saves the file as `Downloads\SynXis Forecast\Forecast_NextYear_2026-10-18.csv`
+9. Closes the report pop-up. Your SynXis tab stays open on the Forecast page.
+
+It only treats a page as the Forecast page when it shows **both** the Date Range
+dropdown and the Generate Report button (the dashboard has other dropdowns that
+also offer "Next Year").
 
 If the Reports menu can't be clicked on the current page, it reloads the SynXis
 home page and tries again, and after that opens the saved **Forecast page
@@ -49,6 +58,7 @@ reload (↻) button on the extension in `chrome://extensions`.
 | File name | `Forecast_{range}_{date}` | Tokens: `{date}` `{time}` `{range}` `{YYYY}` `{MM}` `{DD}` `{HH}` `{mm}` |
 | If file exists | Keep both | Or **Replace** (e.g. file name `Forecast_latest` + Replace = always one up-to-date file) |
 | Date Range | Next Year | Any value from the SynXis dropdown |
+| Home > SPH Dashboard first | On | Turn off if your SynXis has no SPH Dashboard under Home |
 | Forecast page address (backup) | empty | Open the Forecast report in SynXis, then click **Remember from open SynXis tab** |
 
 ### Saving on another drive (e.g. `D:\Reports`)

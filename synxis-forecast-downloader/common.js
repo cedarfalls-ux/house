@@ -4,6 +4,7 @@ export const DEFAULT_SETTINGS = {
   startUrl: 'https://controlcenter-p2.synxis.com/CC/default.aspx',
   forecastUrl: '', // optional backup: address of the Forecast page itself
   dateRange: 'Next Year',
+  openSphDashboard: true, // Home > SPH Dashboard before Reports
 
   scheduleEnabled: true,
   scheduleTime: '02:00', // must be inside the night window (00:00 - 05:59)

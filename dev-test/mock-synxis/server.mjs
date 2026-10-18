@@ -12,6 +12,9 @@
 //   css          - opens on CSS :hover only, which scripted events cannot trigger
 //   shadow       - inside a closed shadow root of a web component
 //   none         - no menu at all (tests the saved Forecast page address)
+// Cookie "bankpopup=1" shows the "You do not have a Bank open" dialog after every
+// dashboard load; it blocks the menus until NO (or X) is clicked.
+// The dashboard also has "Next Year" dropdowns that are NOT the Forecast Date Range.
 
 import https from 'node:https';
 import fs from 'node:fs';
@@ -32,7 +35,7 @@ const cookies = (req) =>
 const page = (title, body, head = '') =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
 
-function dashboard(menuMode) {
+function dashboard(menuMode, { bankPopup, sphDash }) {
   // Header + Reports mega menu. In "shadow" mode it lives inside a CLOSED shadow
   // root of a web component, like a design-system header; "none" has no menu.
   const menu = `
@@ -41,30 +44,34 @@ function dashboard(menuMode) {
   .top a{color:#333;text-decoration:none}
   #mega{position:absolute;top:70px;left:30px;right:30px;background:#fff;border:1px solid #ccc;padding:20px;display:none;opacity:0;transition:opacity .2s}
   #mega.open{display:flex;opacity:1}
-  ${menuMode === 'css' ? '.top:hover + #mega, #mega:hover{display:flex;opacity:1}' : ''}
+  ${menuMode === 'css' ? '.top:hover ~ #mega, #mega:hover{display:flex;opacity:1}' : ''}
   .left div{padding:8px 12px;cursor:pointer}
   .left div.sel{background:#0f7c8c;color:#fff}
   .panel{display:none;margin-left:40px}
   .panel.show{display:block}
   .panel a{display:block;padding:4px 0;color:#333}
+  #homeMenu{position:absolute;top:60px;left:30px;background:#fff;border:1px solid #ccc;display:none}
+  #homeMenu.open{display:block}
+  #homeMenu a{display:block;padding:8px 14px}
 </style>
 <div class="top">
-  <a href="#">Home</a><a href="#">Front Office</a><a href="#">Accounting</a>
+  <a href="javascript:void(0)" id="navHome">Home</a><a href="#">Front Office</a><a href="#">Accounting</a>
   <a href="javascript:void(0)" id="navReports">Reports</a><a href="#">Support</a>
 </div>
+<div id="homeMenu"><a href="/CC/default.aspx">Dashboard</a><a href="/CC/default.aspx?dash=sph">SPH Dashboard</a></div>
 <div id="mega">
   <div class="left">
     <h3>Reports</h3>
-    <div data-p="classic" class="sel">Reports <span>&rarr;</span></div>
+    <div data-p="classic"${sphDash ? '' : ' class="sel"'}>Reports <span>&rarr;</span></div>
     <div data-p="subs">Subscriptions</div>
-    <div data-p="sph"><span>SynXis Property Hub (SPH)</span></div>
+    <div data-p="sph"${sphDash ? ' class="sel"' : ''}><span>SynXis Property Hub (SPH)</span></div>
   </div>
-  <div class="panel show" id="p-classic"><b>Classic</b>
+  <div class="panel${sphDash ? '' : ' show'}" id="p-classic"><b>Classic</b>
     <a href="javascript:void(0)" data-r="decoy">Forecast</a>
     <a href="javascript:void(0)" data-r="decoy">Arrivals</a>
   </div>
   <div class="panel" id="p-subs"><b>Subscriptions</b></div>
-  <div class="panel" id="p-sph">
+  <div class="panel${sphDash ? ' show' : ''}" id="p-sph">
     <div><b>Accounting</b><a href="javascript:void(0)">Cashier Closing</a></div>
     <div><b>Front Office</b><ul>
       <li><a href="javascript:void(0)">Availability</a></li>
@@ -83,13 +90,34 @@ function dashboard(menuMode) {
     `
 <style>body{font-family:sans-serif;margin:0} iframe{width:100%;height:600px;border:0}</style>
 ${header}
-<div id="home"><h2>Good evening</h2><p>Availability … Projections …</p></div>
+<div id="home"><h2>Good evening</h2>
+  <p>Projections period <select id="proj"><option>Today</option><option selected>Next 7 Days</option><option>Next Year</option></select></p>
+  <div style="display:none">Expanded view <select><option>Next Month</option><option>Next Year</option></select></div>
+</div>
+${bankPopup ? `<div id="bankModal" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+  <div style="background:#fff;padding:24px;border-radius:6px"><button id="bankX">&times;</button>
+    <div><b>You do not have a Bank open</b><div>Would you like to open a Bank?</div></div>
+    <button id="bankNo">NO</button> <button id="bankYes">YES</button></div></div>` : ''}
 <iframe id="content" src="about:blank"></iframe>
 <script>
   const mode = ${JSON.stringify(menuMode || 'js')};
+  window.bankOpen = false;
+  const modal = document.getElementById('bankModal');
+  if (modal) {
+    // Shows up a moment after every page load and blocks the menus until closed.
+    setTimeout(() => { modal.style.display = 'flex'; window.bankOpen = true; }, 1200);
+    const close = () => { modal.style.display = 'none'; window.bankOpen = false; };
+    document.getElementById('bankNo').addEventListener('click', close);
+    document.getElementById('bankX').addEventListener('click', close);
+    document.getElementById('bankYes').addEventListener('click', () => { location.href = '/CC/OpenBank.aspx'; });
+  }
   function wire(root) {
     const mega = root.getElementById('mega');
-    if (mode !== 'css') root.getElementById('navReports').addEventListener('click', () => mega.classList.toggle('open'));
+    const homeMenu = root.getElementById('homeMenu');
+    if (mode !== 'css') {
+      root.getElementById('navReports').addEventListener('click', () => { if (!window.bankOpen) mega.classList.toggle('open'); });
+      root.getElementById('navHome').addEventListener('click', () => { if (!window.bankOpen) homeMenu.classList.toggle('open'); });
+    }
     root.querySelectorAll('.left div').forEach((d) => d.addEventListener('click', () => {
       root.querySelectorAll('.left div').forEach((x) => x.classList.remove('sel'));
       root.querySelectorAll('.panel').forEach((x) => x.classList.remove('show'));
@@ -224,7 +252,7 @@ const server = https.createServer({ cert: fs.readFileSync(certFile), key: fs.rea
   if (url.pathname === '/__export_log') return send(200, JSON.stringify(exportLog), { 'Content-Type': 'application/json' });
   if (!loggedIn) return send(302, '', { Location: '/CC/Login.aspx' });
 
-  if (url.pathname === '/CC/default.aspx') return send(200, dashboard(c.menumode));
+  if (url.pathname === '/CC/default.aspx') return send(200, dashboard(c.menumode, { bankPopup: c.bankpopup === '1', sphDash: url.searchParams.get('dash') === 'sph' }));
   if (url.pathname === '/CC/reports/criteria.aspx') return send(200, criteria(url));
   if (url.pathname === '/CC/reports/ReportViewerRun.aspx') return send(200, reportViewer(url, c.rvmode || 'sys'));
   if (url.pathname === '/CC/Reserved.ReportViewerWebControl.axd') {

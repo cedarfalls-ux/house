@@ -11,7 +11,14 @@ import {
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
-const CHECKS = ['scheduleEnabled', 'catchUpIfMissed', 'notifications', 'keepSessionAlive', 'keepWindowOnFailure'];
+const CHECKS = [
+  'scheduleEnabled',
+  'catchUpIfMissed',
+  'openSphDashboard',
+  'notifications',
+  'keepSessionAlive',
+  'keepWindowOnFailure',
+];
 const TEXTS = ['scheduleTime', 'folder', 'fileNameTemplate', 'conflictAction', 'dateRange', 'startUrl', 'forecastUrl'];
 const NUMBERS = ['maxAttempts', 'retryMinutes', 'reportTimeoutSec'];
 

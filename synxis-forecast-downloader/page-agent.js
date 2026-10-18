@@ -27,6 +27,7 @@ export function pageAgent(cmd, args) {
     return el.shadowRoot || null;
   }
   const parentOf = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || null;
+  const BANNER_ID = 'sfd-banner';
   const inShadow = (el) => el.getRootNode() !== document;
 
   // Every element of the frame, including those inside shadow roots.
@@ -38,6 +39,7 @@ export function pageAgent(cmd, args) {
     const stack = [document.body || document.documentElement];
     while (stack.length) {
       for (const el of stack.pop().querySelectorAll('*')) {
+        if (el.id === BANNER_ID || (el.parentElement && el.parentElement.id === BANNER_ID)) continue;
         allCache.push(el);
         const root = shadowOf(el);
         if (root) {
@@ -149,24 +151,106 @@ export function pageAgent(cmd, args) {
     el.click();
   }
 
-  function hasLoginForm() {
-    return deepQueryAll('input[type="password"]').some(isVisible);
+  // ----- what the user sees on screen -----
+
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Orange outline on the element, a short pause so the user can follow, then the click.
+  async function showAndClick(el, { hoverOnly = false, pause = 700 } = {}) {
+    const before = [el.style.outline, el.style.outlineOffset];
+    if (isVisible(el)) {
+      const r = el.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > innerHeight) el.scrollIntoView({ block: 'center' });
+      el.style.outline = '3px solid #ff6a00';
+      el.style.outlineOffset = '2px';
+      await sleepMs(pause);
+    }
+    if (hoverOnly) hover(el);
+    else click(el);
+    setTimeout(() => {
+      el.style.outline = before[0];
+      el.style.outlineOffset = before[1];
+    }, 1200);
+  }
+
+  // Status banner at the bottom of the page (ignored by every search above).
+  function banner() {
+    let box = document.getElementById(BANNER_ID);
+    clearTimeout(window.__sfdBannerTimer);
+    if (args.state === 'remove') {
+      if (box) box.remove();
+      return { ok: true };
+    }
+    if (!box) {
+      box = document.createElement('div');
+      box.id = BANNER_ID;
+      box.setAttribute(
+        'style',
+        'position:fixed;z-index:2147483647;left:50%;bottom:24px;transform:translateX(-50%);max-width:80vw;' +
+          'padding:12px 20px;border-radius:10px;font:600 15px/1.4 "Segoe UI",system-ui,sans-serif;color:#fff;' +
+          'box-shadow:0 6px 24px rgba(0,0,0,.35);pointer-events:none;white-space:pre-wrap',
+      );
+      (document.body || document.documentElement).appendChild(box);
+    }
+    box.style.background = args.state === 'ok' ? '#188038' : args.state === 'err' ? '#d93025' : '#0f7c8c';
+    box.textContent = `Forecast Downloader: ${args.text}`;
+    if (args.hideAfterMs) window.__sfdBannerTimer = setTimeout(() => box.remove(), args.hideAfterMs);
+    return { ok: true };
   }
 
   // ----- Control Center navigation -----
 
+  function hasLoginForm() {
+    return deepQueryAll('input[type="password"]').some(isVisible);
+  }
+
+  // "You do not have a Bank open. Would you like to open a Bank?"  ->  its NO button
+  function bankPopupNo() {
+    const msg = findText((t) => t.includes('do not have a bank open') || t.includes('like to open a bank'))[0];
+    if (!msg) return null;
+    const noButtons = findText((t) => t === 'no');
+    for (let n = parentOf(msg), i = 0; n && i < 10; n = parentOf(n), i++) {
+      const no = noButtons.find((b) => deepContains(n, b));
+      if (no) return clickTarget(no);
+    }
+    return null;
+  }
+
+  function dateRangeLabelled(sel) {
+    for (let n = parentOf(sel), i = 0; n && i < 4; n = parentOf(n), i++) {
+      const t = norm(n.textContent.replace(sel.textContent, ''));
+      if (t.length > 400) break;
+      if (t.includes('date range')) return true;
+    }
+    return false;
+  }
+
+  // The Forecast page's Date Range dropdown: on screen and offering the wanted range.
+  // (Hidden dropdowns elsewhere, e.g. on the dashboard, may also offer "Next Year".)
   function rangeSelect(range) {
     const want = norm(range);
-    const selects = deepQueryAll('select').filter((s) =>
-      [...s.options].some((o) => norm(o.text) === want),
+    const selects = deepQueryAll('select').filter(
+      (s) => isVisible(s) && [...s.options].some((o) => norm(o.text) === want),
     );
-    return selects.find(isVisible) || selects[0] || null;
+    return selects.find(dateRangeLabelled) || selects[0] || null;
+  }
+
+  const usable = (el) => !inHeading(el) && !inBreadcrumb(el);
+  const byTop = (els) => els.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+
+  // Top navigation item ("Home", "Reports"): the highest one on the page.
+  function topNav(word, visibleOnly) {
+    return byTop(findText((t) => t === word, { visibleOnly }).filter(usable));
+  }
+
+  function sphDashboardLinks() {
+    return findText(
+      (t) => t.length < 60 && t.includes('dashboard') && (/\bsph\b/.test(t) || t.includes('property hub')),
+    ).filter(usable);
   }
 
   function forecastLinks(visibleOnly) {
-    const els = findText((t) => t === 'forecast', { visibleOnly }).filter(
-      (el) => !inHeading(el) && !inBreadcrumb(el),
-    );
+    const els = findText((t) => t === 'forecast', { visibleOnly }).filter(usable);
     // "Strong" = the Forecast link sitting in the SPH Front Office list, next to
     // "Forecast By Market Segment" / "Forecast By Rate Plan". The shared parent must
     // not hold another "Forecast" link, so a Forecast in a different menu section
@@ -186,19 +270,11 @@ export function pageAgent(cmd, args) {
   }
 
   function sphLinks(visibleOnly) {
-    return findText((t) => t.startsWith('synxis property hub') && t.length < 60, { visibleOnly }).filter(
-      (el) => !inHeading(el) && !inBreadcrumb(el),
-    );
-  }
-
-  function reportsNav(visibleOnly) {
-    const els = findText((t) => t === 'reports', { visibleOnly }).filter((el) => !inHeading(el) && !inBreadcrumb(el));
-    // The top navigation item is the highest one on the page.
-    return els.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    return findText((t) => t.startsWith('synxis property hub') && t.length < 60, { visibleOnly }).filter(usable);
   }
 
   function generateButtons() {
-    return findText((t) => t === 'generate report' || t === 'generate', { visibleOnly: true });
+    return findText((t) => t === 'generate report' || t === 'generate');
   }
 
   function scan() {
@@ -208,69 +284,94 @@ export function pageAgent(cmd, args) {
     return {
       url: location.href,
       loginForm: hasLoginForm(),
+      bankPopup: !!bankPopupNo(),
       rangeSelect: !!sel,
+      rangeLabelled: !!sel && dateRangeLabelled(sel),
       rangeSelected: sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.trim() : null,
       rangeOptions: sel ? [...sel.options].map((o) => o.text.trim()) : null,
+      generateBtn: generateButtons().length > 0,
+      homeNav: topNav('home', true).length > 0,
+      sphDashboard: sphDashboardLinks().length > 0,
       forecastStrong: fc.strong.length > 0,
       forecastWeak: fc.weak.length > 0,
       sphLink: sphLinks(!hidden).length > 0,
-      reportsNav: reportsNav(!hidden).length > 0,
-      generateBtn: generateButtons().length > 0,
+      reportsNav: topNav('reports', !hidden).length > 0,
     };
   }
 
-  function act() {
+  async function act() {
     const hidden = !!args.allowHidden;
+    const run = async (el, missing, opts) => {
+      if (!el) return { ok: false, error: `${missing} not found` };
+      await showAndClick(el, opts);
+      return { ok: true };
+    };
     switch (args.action) {
-      case 'clickForecast': {
-        const fc = forecastLinks(!hidden);
-        const el = (args.strongOnly ? fc.strong : fc.strong.concat(fc.weak))[0];
-        if (!el) return { ok: false, error: 'Forecast link not found' };
-        click(clickTarget(el));
-        return { ok: true };
+      case 'dismissBank':
+        return run(bankPopupNo(), '"NO" button of the Bank pop-up', { pause: 500 });
+      case 'openHome': {
+        const el = topNav('home', true)[0];
+        return run(el && clickTarget(el), 'Home menu', { hoverOnly: !args.click });
+      }
+      case 'clickSphDashboard': {
+        const el = sphDashboardLinks()[0];
+        return run(el && clickTarget(el), 'SPH Dashboard');
+      }
+      case 'openReports': {
+        const el = topNav('reports', !hidden)[0];
+        return run(el && clickTarget(el), 'Reports menu', { hoverOnly: !args.click });
       }
       case 'clickSPH': {
         const el = sphLinks(!hidden)[0];
-        if (!el) return { ok: false, error: 'SynXis Property Hub (SPH) not found' };
-        click(clickTarget(el));
-        return { ok: true };
+        return run(el && clickTarget(el), 'SynXis Property Hub (SPH)');
       }
-      case 'openReports': {
-        const el = reportsNav(!hidden)[0];
-        if (!el) return { ok: false, error: 'Reports menu not found' };
-        const target = clickTarget(el);
-        if (args.click) click(target);
-        else hover(target);
-        return { ok: true };
+      case 'clickForecast': {
+        const fc = forecastLinks(!hidden);
+        const el = (args.strongOnly ? fc.strong : fc.strong.concat(fc.weak))[0];
+        return run(el && clickTarget(el), 'Forecast link');
+      }
+      case 'clickGenerate': {
+        const el = generateButtons()[0];
+        return run(el && clickTarget(el), 'Generate Report button', { pause: 900 });
       }
       case 'selectRange': {
         const sel = rangeSelect(args.range);
         if (!sel) return { ok: false, error: 'Date Range dropdown not found' };
         const opt = [...sel.options].find((o) => norm(o.text) === norm(args.range));
         if (!opt) return { ok: false, error: `"${args.range}" is not in the Date Range dropdown` };
+        const before = sel.style.outline;
+        sel.style.outline = '3px solid #ff6a00';
         try {
           sel.focus();
         } catch (e) {
           /* ignore */
         }
+        await sleepMs(700);
         const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
         setter.call(sel, opt.value);
         sel.selectedIndex = opt.index;
         opt.selected = true;
         sel.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         sel.dispatchEvent(new Event('change', { bubbles: true }));
-        try {
-          sel.blur();
-        } catch (e) {
-          /* ignore */
-        }
+        // No waiting here: the change may reload the page (post-back) right away.
+        setTimeout(() => {
+          sel.style.outline = before;
+        }, 800);
         return { ok: true };
       }
-      case 'clickGenerate': {
-        const el = generateButtons()[0];
-        if (!el) return { ok: false, error: 'Generate Report button not found' };
-        click(clickTarget(el));
-        return { ok: true };
+      case 'showExport': {
+        // Purely visual: open the report's Export menu and point at "CSV".
+        const btn = deepQueryAll('[title="Export" i],[alt="Export" i],[aria-label="Export" i]').find(isVisible);
+        if (btn) await showAndClick(clickTarget(btn), { pause: 600 });
+        await sleepMs(400);
+        const csv = findText((t) => t.startsWith('csv (comma delimited)'))[0];
+        if (csv) {
+          const before = csv.style.outline;
+          csv.style.outline = '3px solid #ff6a00';
+          await sleepMs(1200);
+          csv.style.outline = before;
+        }
+        return { ok: true, menu: !!btn, csv: !!csv };
       }
       default:
         return { ok: false, error: `Unknown action ${args.action}` };
@@ -298,7 +399,9 @@ export function pageAgent(cmd, args) {
   }
 
   function reportScan() {
-    const text = document.body ? norm(document.body.innerText.slice(0, 30000)) : '';
+    const own = document.getElementById(BANNER_ID);
+    const raw = document.body ? document.body.innerText.slice(0, 30000) : '';
+    const text = norm(own ? raw.replace(own.innerText, '') : raw);
     const loading = findText((t) => t === 'loading...' || t === 'loading', { visibleOnly: true }).length > 0;
     const err = /(an error (has )?occurred[^.]*report processing[^.]*\.?|report processing error[^.]*)/.exec(text);
     return {
@@ -417,6 +520,8 @@ export function pageAgent(cmd, args) {
   }
 
   switch (cmd) {
+    case 'banner':
+      return banner();
     case 'diagnose':
       return diagnose();
     case 'scan':
