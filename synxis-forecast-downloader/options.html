@@ -8,47 +8,66 @@
   <body>
     <div class="header">
       <img src="icons/icon48.png" alt="" />
-      <h1>SynXis Forecast Downloader – Settings</h1>
+      <h1>SynXis Forecast Downloader</h1>
     </div>
 
     <div class="page">
       <div class="card">
-        <h2>Status</h2>
-        <div id="statusRunning" class="row hidden" style="margin-bottom: 8px">
-          <span class="spinner"></span><b>Running:</b> <span id="statusStep"></span>
-          <button class="btn danger" id="cancelRun">Cancel</button>
+        <div class="row" style="justify-content: space-between; align-items: flex-start">
+          <div style="flex: 1; min-width: 260px">
+            <h2>Status</h2>
+            <div id="statusRunning" class="row hidden" style="margin-bottom: 8px">
+              <span class="spinner"></span><b>Running:</b> <span id="statusStep"></span>
+            </div>
+            <div><b>Last download:</b> <span id="statusLast">Never</span></div>
+            <div id="statusPath" class="path hidden" style="margin-top: 4px"></div>
+            <div style="margin-top: 6px"><b>Daily download:</b> <span id="statusDaily">—</span></div>
+            <div style="margin-top: 6px"><b>Auto refresh:</b> <span id="statusRefresh">—</span></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px; min-width: 220px">
+            <button class="btn primary block" id="runNow">▶ Download Forecast now</button>
+            <button class="btn danger hidden" id="cancelRun">Cancel download</button>
+            <div class="row">
+              <button class="btn" id="showFile" style="flex: 1; white-space: nowrap">Show last file</button>
+              <button class="btn" id="openDownloads" style="flex: 1; white-space: nowrap">Open folder</button>
+            </div>
+          </div>
         </div>
-        <div><b>Last run:</b> <span id="statusLast">Never</span></div>
-        <div id="statusPath" class="path hidden" style="margin-top: 4px"></div>
-        <div style="margin-top: 4px"><b>Next automatic run:</b> <span id="statusNext">—</span></div>
+        <div id="runMsg" class="small" style="margin-top: 6px"></div>
       </div>
 
       <div class="card">
-        <h2>Automatic daily download</h2>
+        <h2>Daily automatic download</h2>
         <label class="check">
           <input type="checkbox" id="scheduleEnabled" />
-          <span>Download the Forecast report automatically every night</span>
+          <span>Download the Forecast report automatically once a day</span>
         </label>
         <div class="field">
-          <label for="scheduleTime">Time</label>
-          <input type="time" id="scheduleTime" min="00:00" max="05:59" required />
-          <div class="help">Between 12:00 AM and 5:59 AM. <span id="nextRunText"></span></div>
+          <label>Time window</label>
+          <div class="row">
+            from <input type="time" id="windowStart" required /> to <input type="time" id="windowEnd" required />
+          </div>
+          <div class="help">The download happens once a day inside this window (default 12:00 AM – 11:00 AM).</div>
         </div>
         <div class="field">
-          <label for="maxAttempts">Tries per night</label>
+          <label for="idleSeconds">Start after no activity for (sec)</label>
+          <input type="number" id="idleSeconds" min="15" max="3600" />
+          <div class="help">
+            It starts when SynXis is open and logged in and nobody has moved the mouse or typed for this many seconds.
+          </div>
+        </div>
+        <div class="field">
+          <label for="maxAttempts">Tries per day</label>
           <input type="number" id="maxAttempts" min="1" max="10" />
-          <div class="help">If a run fails (site slow, etc.) it tries again, up to this many times.</div>
+          <div class="help">If a download fails it tries again later, up to this many times a day.</div>
         </div>
         <div class="field">
           <label for="retryMinutes">Minutes between tries</label>
           <input type="number" id="retryMinutes" min="5" max="180" />
         </div>
         <label class="check">
-          <input type="checkbox" id="catchUpIfMissed" />
-          <span
-            >If the computer or Chrome was off at night, download as soon as Chrome is open again (same
-            day)</span
-          >
+          <input type="checkbox" id="runAfterWindow" />
+          <span>If it didn't happen inside the window, still download later the same day (also after inactivity)</span>
         </label>
       </div>
 
@@ -58,8 +77,8 @@
           <label for="folder">Folder (inside Downloads)</label>
           <input type="text" id="folder" placeholder="SynXis Forecast" />
           <div class="help">
-            Use <code>/</code> for sub-folders, e.g. <code>Hotel Reports/Forecast</code>. The folder is created
-            automatically.
+            Type any folder name. Use <code>/</code> for sub-folders, e.g. <code>Hotel Reports/Forecast</code>. It is
+            created automatically.
           </div>
         </div>
         <div class="field">
@@ -83,13 +102,39 @@
         </div>
         <div class="note">
           Chrome only lets extensions save inside your <b>Downloads</b> folder. To save on another drive (for
-          example <code>D:\Reports</code>), change Chrome's download location, and this folder will be created
-          there.
+          example <code>D:\Reports</code>), change Chrome's download location, and this folder will be created there.
           <div style="margin-top: 6px">
-            <button class="btn" id="openDownloadSettings">Open Chrome download settings</button>
-            <button class="btn" id="openDownloads">Open Downloads folder</button>
+            <button class="btn" id="openDownloadSettings">Change Chrome's download location</button>
           </div>
         </div>
+      </div>
+
+      <div class="card">
+        <h2>Auto refresh</h2>
+        <label class="check">
+          <input type="checkbox" id="autoRefreshEnabled" />
+          <span
+            >Refresh these pages when nobody has moved the mouse or typed for the given seconds. Any mouse or keyboard
+            activity starts the count again. Only the tab of each address is refreshed, and it stays on the same
+            page.</span
+          >
+        </label>
+        <div id="rules"></div>
+        <div class="row" style="margin-top: 6px">
+          <button class="btn" id="addRule">+ Add website</button>
+          <span class="small muted">Seconds: at least 15.</span>
+        </div>
+        <label class="check" style="margin-top: 12px">
+          <input type="checkbox" id="answerPopups" />
+          <span
+            >SynXis pop-ups: <b>"You do not have a Bank open"</b> → click <b>NO</b> (after a refresh, or when nobody is
+            using the page) and <b>"Your session is about to expire"</b> → click <b>KEEP SESSION ACTIVE</b></span
+          >
+        </label>
+        <label class="check">
+          <input type="checkbox" id="keepAwake" />
+          <span>Keep the screen on (the computer won't go to sleep while Chrome is running)</span>
+        </label>
       </div>
 
       <div class="card">
@@ -122,38 +167,30 @@
       <div class="card">
         <h2>Other</h2>
         <label class="check">
-          <input type="checkbox" id="oneClick" />
-          <span
-            ><b>One click:</b> clicking the extension icon starts the download right away (right-click the icon for
-            settings, last file or cancel). Turn off to show the small status window instead.</span
-          >
-        </label>
-        <label class="check">
           <input type="checkbox" id="notifications" />
           <span>Show a notification when a download succeeds or fails</span>
         </label>
         <label class="check">
-          <input type="checkbox" id="keepSessionAlive" />
-          <span
-            >Keep the SynXis login active (opens the SynXis home page in the background every 10 minutes so the
-            session is less likely to time out overnight)</span
-          >
-        </label>
-        <label class="check">
           <input type="checkbox" id="keepWindowOnFailure" />
-          <span>Leave the report pop-up / new SynXis tab open when a run fails (to see what went wrong)</span>
+          <span>Leave the report pop-up / new SynXis tab open when a download fails (to see what went wrong)</span>
         </label>
       </div>
 
       <div class="card">
-        <h2>For night runs to work</h2>
+        <h2>So it keeps working every day, even after a restart</h2>
         <ol>
-          <li>The computer must be on and <b>not asleep</b> at the scheduled time.</li>
           <li>
-            Chrome must be running. Turn on <i>"Continue running background apps when Google Chrome is closed"</i>
-            in <button class="btn small" id="openSystemSettings">Chrome system settings</button>.
+            Turn on <i>"Continue running background apps when Google Chrome is closed"</i> in
+            <button class="btn small" id="openSystemSettings">Chrome system settings</button>. Chrome then starts by
+            itself when the computer starts.
           </li>
-          <li>You must be <b>logged in to SynXis</b> in this Chrome profile (and the right hotel selected).</li>
+          <li>
+            Set <i>On startup → "Continue where you left off"</i> in
+            <button class="btn small" id="openStartupSettings">Chrome startup settings</button> so the SynXis tab opens
+            again after a restart.
+          </li>
+          <li>Stay <b>logged in to SynXis</b> in this Chrome profile (right hotel selected).</li>
+          <li>Right-click the extension icon for <i>Download Forecast now</i>, <i>Cancel</i> and <i>Show last file</i>.</li>
         </ol>
       </div>
 
@@ -170,13 +207,17 @@
           If downloads fail: keep the SynXis tab open, click <b>Copy debug info</b> and paste it to whoever supports
           this extension. It shows what the extension can see on the SynXis page (no passwords).
         </div>
-        <textarea id="debugBox" class="hidden" readonly style="width: 100%; height: 160px; margin-top: 8px; font: 11px Consolas, monospace"></textarea>
+        <textarea
+          id="debugBox"
+          class="hidden"
+          readonly
+          style="width: 100%; height: 160px; margin-top: 8px; font: 11px Consolas, monospace"
+        ></textarea>
         <div class="logs" id="logs" style="margin-top: 10px"></div>
       </div>
 
       <div class="savebar">
         <button class="btn primary" id="save">Save settings</button>
-        <button class="btn" id="runNow">Download now</button>
         <span id="status" class="small"></span>
       </div>
     </div>

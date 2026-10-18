@@ -1,29 +1,34 @@
-// Shared settings and helpers used by the background worker, popup and options page.
+// Shared settings and helpers used by the background worker and the Settings page.
 
 export const DEFAULT_SETTINGS = {
   startUrl: 'https://controlcenter-p2.synxis.com/CC/default.aspx',
   forecastUrl: '', // optional backup: address of the Forecast page itself
   dateRange: 'Next Year',
 
+  // Daily automatic download: once a day inside the window, as soon as SynXis is
+  // open and logged in and nobody has touched mouse/keyboard for idleSeconds.
   scheduleEnabled: true,
-  scheduleTime: '02:00', // must be inside the night window (00:00 - 05:59)
-  maxAttempts: 3, // scheduled attempts per day (first try + retries)
+  windowStart: '00:00',
+  windowEnd: '11:00',
+  idleSeconds: 90,
+  maxAttempts: 3, // automatic attempts per day (first try + retries)
   retryMinutes: 20,
-  catchUpIfMissed: true, // PC/Chrome was off at night -> run when Chrome is next open
+  runAfterWindow: false, // if it didn't happen inside the window, still try later that day
 
   folder: 'SynXis Forecast', // sub-folder inside Chrome's Downloads folder
   fileNameTemplate: 'Forecast_{range}_{date}',
   conflictAction: 'uniquify', // 'uniquify' | 'overwrite'
 
-  oneClick: true, // clicking the extension icon starts the download right away
+  // Auto refresh: reload the tab of each site after its seconds of inactivity.
+  autoRefreshEnabled: false,
+  autoRefreshRules: [{ url: 'https://controlcenter-p2.synxis.com/CC/default.aspx', seconds: 300 }],
+  answerPopups: true, // SynXis: Bank pop-up -> NO, session about to expire -> KEEP SESSION ACTIVE
+  keepAwake: true, // keep the screen on / computer awake
+
   notifications: true,
   keepWindowOnFailure: false,
-  keepSessionAlive: false,
   reportTimeoutSec: 180,
 };
-
-// Night window in which the scheduled run is allowed: [00:00, 06:00)
-export const WINDOW_END_HOUR = 6;
 
 // Options exactly as they appear in the SynXis "Date Range" dropdown.
 export const DATE_RANGES = [
@@ -67,37 +72,105 @@ export function parseTime(hhmm) {
   return { h, min };
 }
 
-export function isNightTime(hhmm) {
+const minutesOf = (hhmm) => {
   const t = parseTime(hhmm);
-  return !!t && t.h < WINDOW_END_HOUR;
+  return t ? t.h * 60 + t.min : null;
+};
+
+// Is "now" inside the daily window [windowStart, windowEnd)?
+export function inWindow(settings, now = new Date()) {
+  const start = minutesOf(settings.windowStart);
+  const end = minutesOf(settings.windowEnd);
+  const cur = now.getHours() * 60 + now.getMinutes();
+  return start != null && end != null && cur >= start && cur < end;
 }
 
-// Today's scheduled time as a Date (local time).
-export function scheduledTimeOn(settings, day) {
-  const t = parseTime(settings.scheduleTime) || parseTime(DEFAULT_SETTINGS.scheduleTime);
-  const d = new Date(day);
-  d.setHours(t.h, t.min, 0, 0);
-  return d;
+export function validWindow(settings) {
+  const start = minutesOf(settings.windowStart);
+  const end = minutesOf(settings.windowEnd);
+  return start != null && end != null && start < end;
 }
 
-// Decides whether the scheduled download should start now: at the set time, as a
-// retry after a failure, or (optionally) as a catch-up when the night run was
-// missed. Returns the trigger name, or null when nothing is due.
+// Decides whether the daily download may start now (the caller still checks that
+// SynXis is open and the user is inactive). Returns the trigger name or null.
 export function dueTrigger(settings, schedState, now = new Date()) {
-  if (!settings.scheduleEnabled) return null;
-  if (now.getTime() < scheduledTimeOn(settings, now).getTime() - 60000) return null;
+  if (!settings.scheduleEnabled || !validWindow(settings)) return null;
   const st =
     schedState && schedState.date === localDateKey(now) ? schedState : { attempts: 0, success: false };
   if (st.success || st.attempts >= settings.maxAttempts) return null;
   if (st.lastAttemptAt && now.getTime() - st.lastAttemptAt < settings.retryMinutes * 60000) return null;
-  if (now.getHours() >= WINDOW_END_HOUR) return settings.catchUpIfMissed ? 'catch-up' : null;
-  return st.attempts ? 'retry' : 'scheduled';
+  if (inWindow(settings, now)) return st.attempts ? 'retry' : 'scheduled';
+  const afterWindow = now.getHours() * 60 + now.getMinutes() >= minutesOf(settings.windowEnd);
+  return afterWindow && settings.runAfterWindow ? 'after-window' : null;
 }
 
-export function nextScheduledRun(settings, now = new Date()) {
-  const d = scheduledTimeOn(settings, now);
-  if (d.getTime() <= now.getTime()) d.setDate(d.getDate() + 1);
-  return d;
+// One line for the Settings page: what the daily download is doing today.
+export function dailyStatus(settings, schedState, now = new Date()) {
+  if (!settings.scheduleEnabled) return 'Turned off';
+  if (!validWindow(settings)) return 'The time window is not valid';
+  const win = `${formatTime(settings.windowStart)} – ${formatTime(settings.windowEnd)}`;
+  const when = `when SynXis is open and nobody has used mouse/keyboard for ${settings.idleSeconds} sec`;
+  const st =
+    schedState && schedState.date === localDateKey(now) ? schedState : { attempts: 0, success: false };
+  if (st.success) return `✔ Done for today. Next: tomorrow ${win}`;
+  if (st.attempts >= settings.maxAttempts) {
+    return `Stopped for today after ${st.attempts} failed tries. Next: tomorrow ${win}`;
+  }
+  const retryAt = st.lastAttemptAt ? st.lastAttemptAt + settings.retryMinutes * 60000 : 0;
+  if (retryAt > now.getTime()) {
+    const t = new Date(retryAt);
+    return `Last try failed; tries again after ${formatTime(`${t.getHours()}:${pad(t.getMinutes())}`)} ${when}`;
+  }
+  if (inWindow(settings, now)) return `Waiting now (${win}): starts ${when}`;
+  const cur = now.getHours() * 60 + now.getMinutes();
+  if (cur < minutesOf(settings.windowStart)) return `Today ${win}, ${when}`;
+  return settings.runAfterWindow ? `Missed the window: starts ${when}` : `Next: tomorrow ${win}`;
+}
+
+export function formatTime(hhmm) {
+  const t = parseTime(hhmm);
+  if (!t) return hhmm;
+  return new Date(2000, 0, 1, t.h, t.min).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+// ---- auto refresh ----
+
+// "controlcenter-p2.synxis.com/CC/default.aspx" -> "https://controlcenter-p2.synxis.com/CC/default.aspx"
+export function normalizeSiteUrl(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  try {
+    const u = new URL(s);
+    u.hash = '';
+    return u.href;
+  } catch (e) {
+    return null;
+  }
+}
+
+// A tab matches a rule when it is on the same site and its address starts with
+// the rule's address (query/hash ignored), so only that page's tab is refreshed.
+export function ruleMatches(rule, tabUrl) {
+  const site = normalizeSiteUrl(rule && rule.url);
+  if (!site || !tabUrl) return false;
+  try {
+    const r = new URL(site);
+    const t = new URL(tabUrl);
+    const strip = (p) => p.replace(/\/+$/, '').toLowerCase();
+    return r.origin === t.origin && strip(t.pathname).startsWith(strip(r.pathname));
+  } catch (e) {
+    return false;
+  }
+}
+
+export function findRule(settings, tabUrl) {
+  return (settings.autoRefreshRules || []).find((r) => r.seconds >= 15 && ruleMatches(r, tabUrl)) || null;
+}
+
+// Match pattern for chrome.scripting/permissions, e.g. "https://example.com/*"
+export function originPattern(url) {
+  return `${new URL(url).origin}/*`;
 }
 
 // Folder path relative to the Downloads folder. Keeps "/" for nested folders,

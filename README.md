@@ -1,13 +1,20 @@
 # SynXis Forecast Auto Downloader (Chrome extension)
 
-Downloads the **SynXis Property Hub → Front Office → Forecast** report with
-**Date Range = Next Year** as a **CSV** file, automatically every night between
-12 AM and 6 AM, or whenever you click **Download Forecast now**. The file goes
-into a folder you choose.
+Two things in one extension:
 
-**One click:** click the extension icon once and the whole thing runs by itself.
-Right-click the icon for *Settings, status & log*, *Show last downloaded file*
-and *Cancel the running download*.
+1. **Forecast download** – downloads the **SynXis Property Hub → Front Office →
+   Forecast** report with **Date Range = Next Year** as a **CSV** file into a
+   folder you choose: once a day by itself, or when you click
+   **Download Forecast now**.
+2. **Auto refresh** – refreshes the tab of the website(s) you enter after the
+   number of seconds you set without mouse/keyboard activity, and answers the
+   SynXis pop-ups for you.
+
+**Click the extension icon to open Settings.** Nothing is downloaded by the
+click; the download starts only from the **▶ Download Forecast now** button
+(or right-click the icon → *Download Forecast now*).
+
+## Forecast download
 
 What it does, step by step, just like you would by hand, and you can watch it
 happen (each button gets an orange outline just before it is clicked, and a
@@ -16,7 +23,7 @@ banner at the bottom of the page shows the current step):
 1. Uses the **SynXis tab you already have open** (it opens a new tab only if no
    SynXis tab is open, and closes that tab again at the end)
 2. If **"You do not have a Bank open – Would you like to open a Bank?"** shows
-   up (it can appear after every refresh), clicks **NO**
+   up, clicks **NO**
 3. **Reports** (top menu) → in the menu's list *Reports / Subscriptions /
    SynXis Property Hub (SPH)* clicks the 3rd one, **SynXis Property Hub (SPH)**
    (never the "SynXis Property Hub 4.30.0.0" version text in the page footer)
@@ -27,13 +34,34 @@ banner at the bottom of the page shows the current step):
 7. Saves the file as `Downloads\SynXis Forecast\Forecast_NextYear_2026-10-18.csv`
 8. Closes the report pop-up. Your SynXis tab stays open on the Forecast page.
 
-It only treats a page as the Forecast page when it shows **both** the Date Range
-dropdown and the Generate Report button (the dashboard has other dropdowns that
-also offer "Next Year").
+### Daily automatic download
 
-If the Reports menu can't be clicked on the current page, it reloads the SynXis
-home page and tries again, and after that opens the saved **Forecast page
-address** (see Settings → Report) if you saved one.
+Once a day, **any time between 12:00 AM and 11:00 AM**, as soon as
+
+- a SynXis tab is open and logged in, and
+- nobody has moved the mouse or typed for **90 seconds** (whole computer),
+
+the download runs by itself. If it fails it tries again after 20 minutes, up to
+3 times that day. Window, seconds and tries can be changed in Settings. It keeps
+working after Chrome or the computer restarts (see *Keep it working every day*).
+
+## Auto refresh
+
+In Settings → **Auto refresh**: turn it on, enter the website address (for
+example `https://controlcenter-p2.synxis.com/CC/default.aspx`) and the seconds.
+Add more websites with **+ Add website**.
+
+- The tab is refreshed when nobody has moved the mouse or typed for that many
+  seconds. Any real mouse movement or key press starts the count again.
+- Only the tab of the address you entered is refreshed, and it stays on the
+  same page.
+- Never during a Forecast download.
+- SynXis pop-ups: **"You do not have a Bank open"** → **NO** (right after an
+  auto refresh, or when nobody is using the page, so you can still click YES
+  yourself), **"Your session is about to expire"** → **KEEP SESSION ACTIVE**.
+- **Keep the screen on**: the screen stays on and the computer does not go to
+  sleep while Chrome runs.
+- Websites other than SynXis ask for Chrome's permission once, when you save.
 
 ## Install (one time, about 2 minutes)
 
@@ -45,26 +73,28 @@ address** (see Settings → Report) if you saved one.
 4. Click **Load unpacked** and select the `synxis-forecast-downloader` folder.
 5. Click the puzzle icon in the toolbar and **pin** "SynXis Forecast Auto Downloader".
 6. Log in to SynXis in this same Chrome profile (select the right hotel).
-7. Click the extension icon once to test it. Your SynXis tab does everything by
-   itself; the report pop-up opens and closes, and a green banner shows where
-   the file was saved.
+7. Click the extension icon → Settings opens → **▶ Download Forecast now** to
+   test it.
 
 **Updating to a new version:** replace the files in the folder, then click the
 reload (↻) button on the extension in `chrome://extensions`.
 
-## Settings (extension icon → Settings)
+## Settings
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| Automatic daily download | On | |
-| Time | 2:00 AM | Any time from 12:00 AM to 5:59 AM |
-| Tries per night / minutes between tries | 3 / 20 | Retries if the site is slow or a run fails |
-| Catch up if missed | On | If the PC/Chrome was off at night, it downloads when Chrome is open again that day |
-| Folder (inside Downloads) | `SynXis Forecast` | Use `/` for sub-folders, e.g. `Hotel Reports/Forecast` |
+| Daily automatic download | On | Once a day |
+| Time window | 12:00 AM – 11:00 AM | Start must be before end |
+| Start after no activity for | 90 sec | Whole computer: no mouse/keyboard |
+| Tries per day / minutes between tries | 3 / 20 | |
+| Download later if the window was missed | Off | Still waits for inactivity |
+| Folder (inside Downloads) | `SynXis Forecast` | Any name; `/` for sub-folders, e.g. `Hotel Reports/Forecast` |
 | File name | `Forecast_{range}_{date}` | Tokens: `{date}` `{time}` `{range}` `{YYYY}` `{MM}` `{DD}` `{HH}` `{mm}` |
 | If file exists | Keep both | Or **Replace** (e.g. file name `Forecast_latest` + Replace = always one up-to-date file) |
+| Auto refresh | Off | Website + seconds (at least 15) |
+| SynXis pop-ups | On | Bank → NO, session → KEEP SESSION ACTIVE |
+| Keep the screen on | On | |
 | Date Range | Next Year | Any value from the SynXis dropdown |
-| One click | On | Icon click starts the download. Off = icon opens a small status window with a Download button |
 | Forecast page address (backup) | empty | Open the Forecast report in SynXis, then click **Remember from open SynXis tab** |
 
 ### Saving on another drive (e.g. `D:\Reports`)
@@ -74,18 +104,16 @@ somewhere else, change Chrome's download location
 (**chrome://settings/downloads → Location → Change**, there is a button for it
 in Settings). The extension's folder is then created inside that location.
 
-## For the night run to work
+## Keep it working every day, even after a restart
 
-1. **The PC must be on and not asleep** at the scheduled time
-   (Windows Settings → System → Power → Sleep: *Never* while plugged in).
-2. **Chrome must be running.** Turn on *"Continue running background apps when
-   Google Chrome is closed"* in **chrome://settings/system**. Chrome then keeps
-   running in the background (system tray) even when all windows are closed.
-3. **You must be logged in to SynXis** in this Chrome profile. If the session
-   has expired, the run stops with *"SynXis is not logged in"* and you get a
-   notification. Optionally turn on **Keep the SynXis login active** in
-   Settings (it opens the SynXis home page in the background every 10 minutes).
-   This helps, but can't beat a hard session time limit set by SynXis.
+1. Turn on *"Continue running background apps when Google Chrome is closed"* in
+   **chrome://settings/system**. Chrome then starts by itself when the computer
+   starts and keeps running in the background.
+2. Set **chrome://settings/onStartup → "Continue where you left off"** so the
+   SynXis tab opens again after a restart.
+3. Stay **logged in to SynXis** in this Chrome profile. Auto refresh with
+   *KEEP SESSION ACTIVE* helps the session stay alive. If SynXis logs you out,
+   the daily download waits until you log in again (it shows in the log).
 
 ## Troubleshooting
 
@@ -95,29 +123,27 @@ in Settings). The extension's folder is then created inside that location.
   see on the open SynXis tab (menu items, frames, dropdowns, last error, log).
   Keep SynXis open, click it, and send the copied text. It contains no
   passwords.
-- Turn on **Leave the report pop-up / new SynXis tab open when a run fails** to
-  see exactly where it stopped.
+- Turn on **Leave the report pop-up / new SynXis tab open when a download
+  fails** to see exactly where it stopped.
 - *"Report window did not open"*: the extension allows pop-ups for SynXis
   automatically. If it still happens, allow pop-ups for
   `controlcenter-p2.synxis.com` in Chrome's site settings.
 - *"Could not open the Forecast report page"*: open the Forecast report by hand,
   click **Remember from open SynXis tab** in Settings, and send the debug info.
-- If Chrome asks *where to save* for this report, turn off *"Ask where to save
-  each file before downloading"* in chrome://settings/downloads (normally the
-  extension saves without asking).
 
 ## Project layout
 
 ```
 synxis-forecast-downloader/   the extension (load this folder in Chrome)
-  manifest.json               permissions, background worker, popup, settings page
-  background.js               schedule, retries, and the step-by-step run
-  page-agent.js               code that runs inside the SynXis pages (clicks, dropdown, CSV export)
-  common.js                   settings, schedule and file-name helpers
-  popup.*  options.*          the popup and the Settings page
+  manifest.json               permissions, background worker, Settings page
+  background.js               daily download, auto refresh, and the step-by-step run
+  page-agent.js               code run inside the SynXis pages for the download
+  content-autorefresh.js      in-page part of auto refresh and the pop-up answers
+  common.js                   settings, schedule, auto-refresh and file-name helpers
+  options.*                   the Settings page
 dev-test/                     tests (not needed to use the extension)
   common.test.mjs             unit tests:  node --test dev-test/common.test.mjs
-  mock-synxis/server.mjs      a fake SynXis site with the same menus and report pop-up
+  mock-synxis/server.mjs      a fake SynXis site with the same menus, pop-ups and report pop-up
   e2e.mjs                     loads the extension in Chromium against the fake site:
                               node dev-test/e2e.mjs [path-to-chrome]
 ```

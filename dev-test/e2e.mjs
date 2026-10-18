@@ -123,14 +123,13 @@ async function waitForRunEnd(since, timeoutMs = 300000) {
   throw new Error('Run did not finish in time');
 }
 
-async function runFromPopup() {
+// Clicks "Download Forecast now" on the Settings page.
+async function runFromSettings() {
   const since = Date.now();
-  const popup = await openPage(`chrome-extension://${extId}/popup.html`);
-  await evaluate(popup.sessionId, `document.getElementById('runNow').click()`);
-  await sleep(300);
-  await closePage(popup);
+  await evaluate(ui.sessionId, `document.getElementById('runNow').click()`);
   return waitForRunEnd(since);
 }
+const setIdle = (state) => evaluate(ui.sessionId, `chrome.storage.local.set({ devIdleOverride: ${JSON.stringify(state)} })`);
 
 const results = [];
 function check(name, cond, detail = '') {
@@ -178,14 +177,14 @@ const isExpected = (file) => fs.existsSync(file) && fs.readFileSync(file).equals
 
 // 1. Not logged in, no SynXis tab open -> clear failure, the tab it opened is closed again
 let t0 = Date.now();
-let run = await runFromPopup();
+let run = await runFromSettings();
 check('Not logged in: run fails with a login message', !run.ok && /not logged in/i.test(run.error), run.error);
 check('Not logged in: the tab it opened is closed again', (await synxisPages()).length === 0);
 
 // 2. Logged in, no SynXis tab open -> opens one tab (not a window), downloads, closes it
 await setCookies({ sess: '1', rvmode: 'sys', menumode: 'js', bankpopup: '1' });
 t0 = Date.now();
-run = await runFromPopup();
+run = await runFromSettings();
 let file = path.join(folder, `Forecast_NextYear_${dateKey}.csv`);
 check('[no tab open] run succeeds', run.ok, run.ok ? run.path : run.error);
 check('[no tab open] exact Forecast / Next Year CSV saved in Downloads/SynXis Forecast', isExpected(file));
@@ -219,7 +218,7 @@ for (const [label, cookies] of [
       await sleep(700);
     }
   })();
-  run = await runFromPopup();
+  run = await runFromSettings();
   shooting = false;
   await shots;
   file = path.join(folder, `Forecast_NextYear_${dateKey} (${++n}).csv`);
@@ -249,13 +248,8 @@ for (const [label, cookies] of [
   if (!run.ok || label.includes('shadow')) console.log(`\n  Log of ${label} run:\n${runLog}\n`);
 }
 
-// One click on the toolbar icon runs the download (no popup); the popup comes back when turned off
-check('One-click icon: no popup by default', (await evaluate(ui.sessionId, 'chrome.action.getPopup({})')) === '');
-await setSettings({ oneClick: false });
-await sleep(800);
-check('One-click off: icon opens the status popup', (await evaluate(ui.sessionId, 'chrome.action.getPopup({})')).endsWith('/popup.html'));
-await setSettings({ oneClick: true });
-await sleep(800);
+// The toolbar icon has no popup: clicking it opens Settings (downloads start only from the button)
+check('Icon click opens Settings, not a download', (await evaluate(ui.sessionId, 'chrome.action.getPopup({})')) === '');
 
 // 4. "Remember from open SynXis tab" saves the Forecast page address (tab is on Forecast now)
 const learned = await message({ type: 'learnForecast' });
@@ -277,57 +271,126 @@ fs.writeFileSync(path.join(work, 'debug-info.json'), JSON.stringify(info, null, 
 await setCookies({ menumode: 'none' });
 await resetExisting();
 t0 = Date.now();
-run = await runFromPopup();
+run = await runFromSettings();
 file = path.join(folder, `Forecast_NextYear_${dateKey} (${++n}).csv`);
 check('[no menu] run succeeds using the saved address', run.ok && (await logsSince(t0)).includes('saved Forecast page address'), run.ok ? run.path : run.error);
 check('[no menu] exact CSV saved', isExpected(file));
 console.log(`\n  Log of no-menu run:\n${await logsSince(t0)}\n`);
 await setCookies({ menumode: 'js' });
 
-// 3. Scheduled run through the real alarm, custom folder + overwrite
-await setCookie('rvmode', 'sys');
-const now = new Date();
-const at = new Date(now.getTime() + 60000);
-if (at.getHours() < 6) {
-  const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+// 7. Daily download: inside the time window, only after no activity, once a day
+await setCookies({ rvmode: 'sys', menumode: 'js' });
+await resetExisting();
+const pad2 = (x) => String(x).padStart(2, '0');
+const nowD = new Date();
+if (!(nowD.getHours() === 23 && nowD.getMinutes() > 50)) {
+  const end = new Date(Math.min(nowD.getTime() + 3600e3, new Date(nowD).setHours(23, 59, 0, 0)));
   await setSettings({
-    scheduleTime: hhmm,
+    windowStart: '00:00',
+    windowEnd: `${pad2(end.getHours())}:${pad2(end.getMinutes())}`,
+    idleSeconds: 15,
     folder: 'Hotel Reports/Forecast',
     fileNameTemplate: 'Forecast_latest',
     conflictAction: 'overwrite',
   });
-  await sleep(1000);
-  const { nextRunAt } = await storage('nextRunAt');
-  check('Schedule: next run stored for the chosen time', nextRunAt && new Date(nextRunAt).getMinutes() === at.getMinutes(), new Date(nextRunAt).toString());
-  console.log(`  waiting for the ${hhmm} alarm…`);
-  run = await waitForRunEnd(now.getTime(), 4 * 60000);
-  const full = path.join(downloads, 'Hotel Reports', 'Forecast', 'Forecast_latest.csv');
-  check('Schedule: alarm started the run by itself', run.trigger === 'scheduled', `trigger=${run.trigger}`);
-  check('Schedule: run succeeds', run.ok, run.ok ? run.path : run.error);
-  check('Schedule: saved into Hotel Reports/Forecast/Forecast_latest.csv', fs.existsSync(full));
-  const { schedState, nextRunAt: next2 } = await storage(['schedState', 'nextRunAt']);
-  check('Schedule: today marked done', schedState && schedState.success === true, JSON.stringify(schedState));
-  check('Schedule: rescheduled for tomorrow', next2 - nextRunAt >= 23 * 3600e3, new Date(next2).toString());
+  await setIdle('active');
+  const before = (await storage('lastRun')).lastRun.at;
+  console.log('  someone is "using" the computer for 70 s (no daily download expected)…');
+  await sleep(70000);
+  check('Daily: does not start while the computer is in use', (await storage('lastRun')).lastRun.at === before);
 
-  // second run with overwrite must replace, not add "(1)"
+  const since = Date.now();
+  await setIdle('idle'); // nobody touched mouse/keyboard for the set seconds
+  run = await waitForRunEnd(since, 4 * 60000);
+  const full = path.join(downloads, 'Hotel Reports', 'Forecast', 'Forecast_latest.csv');
+  check('Daily: started by itself after inactivity', run.trigger === 'scheduled', `trigger=${run.trigger}`);
+  check('Daily: download succeeds into Hotel Reports/Forecast/Forecast_latest.csv', run.ok && isExpected(full), run.ok ? run.path : run.error);
+  const { schedState } = await storage('schedState');
+  check('Daily: today marked done', schedState && schedState.success === true, JSON.stringify(schedState));
+  await setIdle('locked');
+  await sleep(8000);
+  check('Daily: does not run a second time the same day', (await storage('lastRun')).lastRun.at === run.at);
+
+  // a manual run with "Replace the old file" overwrites instead of adding "(1)"
   fs.writeFileSync(full, 'old');
-  run = await runFromPopup();
-  check('Overwrite: same file replaced', run.ok && fs.readFileSync(full).equals(expectedCsv('forecast', 'Next Year')));
+  run = await runFromSettings();
+  check('Overwrite: same file replaced', run.ok && isExpected(full));
   check('Overwrite: no "(1)" copy created', fs.readdirSync(path.dirname(full)).length === 1, fs.readdirSync(path.dirname(full)).join(', '));
 } else {
-  console.log('SKIP  schedule test (local time is past 05:58)');
+  console.log('SKIP  daily download test (too close to midnight)');
 }
 
+// 8. Auto refresh: only the entered address's tab, only after no activity, Bank pop-up -> NO
+await setCookies({ bankpopup: '1', sessionpopup: '0' });
+await setSettings({
+  autoRefreshEnabled: true,
+  autoRefreshRules: [{ url: `https://${HOST}/CC/default.aspx`, seconds: 15 }],
+  answerPopups: true,
+});
+await setIdle('idle');
+await sleep(1500);
+await resetExisting();
+const other = await openPage(`https://${HOST}/CC/reports/criteria.aspx?report=forecast`);
+const timeOrigin = (p) => evaluate(p.sessionId, 'performance.timeOrigin').catch(() => null);
+await send('Target.activateTarget', { targetId: existing.targetId }); // SynXis tab in front, like at the desk
+const e1 = await timeOrigin(existing);
+const o1 = await timeOrigin(other);
+console.log('  moving the mouse on the SynXis tab for 24 s…');
+for (let i = 0; i < 8; i++) {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 200 + i * 5, y: 200 }, existing.sessionId);
+  await sleep(3000);
+}
+check('Auto refresh: no refresh while the mouse is moving', (await timeOrigin(existing)) === e1);
+check('Auto refresh: Bank pop-up left for the user while they are active', (await evaluate(existing.sessionId, 'window.bankOpen')) === true);
+const tR = Date.now();
+let e2 = e1;
+for (let i = 0; i < 30 && e2 === e1; i++) {
+  await sleep(1000);
+  e2 = (await timeOrigin(existing)) || e1;
+}
+check('Auto refresh: refreshed after 15 s without activity', e2 !== e1);
+await sleep(4000);
+const existingUrl = (await pageTargets()).find((p) => p.targetId === existing.targetId)?.url || '';
+check('Auto refresh: stayed on the same page', existingUrl.endsWith('/CC/default.aspx'), existingUrl);
+check(
+  'Auto refresh: answered NO to the Bank pop-up after the refresh',
+  (await evaluate(existing.sessionId, 'window.bankOpen')) === false && (await logsSince(tR)).includes('clicked NO'),
+);
+check('Auto refresh: another page of the same site (not entered) was not refreshed', (await timeOrigin(other)) === o1);
+// SynXis tab behind another tab (its timers run late): the 30-second check still refreshes it
+await send('Target.activateTarget', { targetId: other.targetId });
+const e3 = await timeOrigin(existing);
+let e4 = e3;
+for (let i = 0; i < 60 && e4 === e3; i++) {
+  await sleep(1000);
+  e4 = (await timeOrigin(existing)) || e3;
+}
+check('Auto refresh: also works while the tab is in the background', e4 !== e3);
+await closePage(other);
+
+// "Your session is about to expire" -> KEEP SESSION ACTIVE
+await setIdle('active'); // no refreshes during this check
+await setCookies({ bankpopup: '0', sessionpopup: '1' });
+await resetExisting();
+const tS = Date.now();
+await sleep(7000);
+check(
+  'Session pop-up: clicked KEEP SESSION ACTIVE',
+  (await evaluate(existing.sessionId, 'window.keptAlive')) === true && (await logsSince(tS)).includes('KEEP SESSION ACTIVE'),
+);
+await setSettings({ autoRefreshEnabled: false });
+await setCookies({ sessionpopup: '0' });
+await evaluate(ui.sessionId, `chrome.storage.local.remove('devIdleOverride')`);
+
 // screenshots of the UI for a visual check
-for (const name of ['popup', 'options']) {
+for (const name of ['options']) {
   const p = await openPage(`chrome-extension://${extId}/${name}.html`);
-  if (name === 'popup') await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 520, deviceScaleFactor: 1, mobile: false }, p.sessionId);
-  await sleep(500);
+  await sleep(800);
   const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: name === 'options' }, p.sessionId);
   fs.writeFileSync(path.join(work, `${name}.png`), Buffer.from(data, 'base64'));
   await closePage(p);
 }
-console.log(`\nScreenshots: ${work}/popup.png, ${work}/options.png`);
+console.log(`\nScreenshot: ${work}/options.png`);
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed}/${results.length} checks passed`);

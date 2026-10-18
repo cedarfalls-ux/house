@@ -1,10 +1,18 @@
-import { getSettings, saveSettings, buildTargetPath, localDateKey, nextScheduledRun, dueTrigger } from './common.js';
+import {
+  getSettings,
+  saveSettings,
+  buildTargetPath,
+  localDateKey,
+  dueTrigger,
+  normalizeSiteUrl,
+  findRule,
+  originPattern,
+} from './common.js';
 import { pageAgent, mainWorldViewerInfo } from './page-agent.js';
 
-const ALARM_DAILY = 'daily-run';
 const ALARM_WATCHDOG = 'watchdog';
 const ALARM_STARTUP = 'startup-check';
-const ALARM_KEEPALIVE = 'keep-alive';
+const ALARM_REFRESH = 'auto-refresh-check';
 
 const OVERALL_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_LOGS = 300;
@@ -687,69 +695,170 @@ async function learnForecastUrl() {
   return { ok: false, error: 'Open the Forecast report page in SynXis first (the page with the Date Range dropdown).' };
 }
 
-// ---------------------------------------------------------------- schedule
+// ---------------------------------------------------------------- daily download
+
+// Inactivity of the whole computer (no mouse/keyboard input for `seconds`).
+async function idleState(seconds) {
+  // Only the automated tests set this: headless Chrome has no input devices.
+  const { devIdleOverride } = await chrome.storage.local.get('devIdleOverride');
+  if (devIdleOverride) return devIdleOverride;
+  return chrome.idle.queryState(Math.max(15, seconds));
+}
 
 async function ensureAlarms() {
   const s = await getSettings();
-  await chrome.alarms.clear(ALARM_DAILY);
+  chrome.idle.setDetectionInterval(Math.max(15, s.idleSeconds));
   if (s.scheduleEnabled) {
-    const next = nextScheduledRun(s);
-    await chrome.alarms.create(ALARM_DAILY, { when: next.getTime() });
     if (!(await chrome.alarms.get(ALARM_WATCHDOG))) {
-      await chrome.alarms.create(ALARM_WATCHDOG, { periodInMinutes: 5 });
+      await chrome.alarms.create(ALARM_WATCHDOG, { periodInMinutes: 1 });
     }
-    await chrome.storage.local.set({ nextRunAt: next.getTime() });
   } else {
     await chrome.alarms.clear(ALARM_WATCHDOG);
-    await chrome.storage.local.set({ nextRunAt: null });
   }
-  if (s.keepSessionAlive) {
-    if (!(await chrome.alarms.get(ALARM_KEEPALIVE))) {
-      await chrome.alarms.create(ALARM_KEEPALIVE, { periodInMinutes: 10 });
+  if (s.autoRefreshEnabled) {
+    if (!(await chrome.alarms.get(ALARM_REFRESH))) {
+      await chrome.alarms.create(ALARM_REFRESH, { periodInMinutes: 0.5 });
     }
   } else {
-    await chrome.alarms.clear(ALARM_KEEPALIVE);
+    await chrome.alarms.clear(ALARM_REFRESH);
   }
 }
 
+let lastWaitNote = '';
+function waitingNote(why) {
+  const key = `${localDateKey()} ${why}`;
+  if (key === lastWaitNote) return;
+  lastWaitNote = key;
+  log('info', `Daily download is waiting: ${why}`);
+}
+
+// Starts the daily download once a day inside the time window, as soon as SynXis
+// is open and logged in and nobody has used mouse/keyboard for idleSeconds.
 async function checkDue(source) {
   if (currentRun) return;
   const s = await getSettings();
   const { schedState } = await chrome.storage.local.get('schedState');
   const trigger = dueTrigger(s, schedState);
   if (!trigger) return;
-  log('info', `Scheduled run is due (${source})`);
+  if ((await idleState(s.idleSeconds)) === 'active') return;
+
+  const found = await findSynxisTab(new URL(s.startUrl).origin);
+  if (!found) return waitingNote('no SynXis tab is open');
+  const onLoginPage = /login|logon|signin|sign-in/i.test(new URL(found.t.url).pathname);
+  const frames = onLoginPage ? [] : await runAgent(found.t.id, 'scan', { range: s.dateRange }).catch(() => []);
+  if (onLoginPage || frames.some((f) => f.loginForm)) return waitingNote('SynXis is not logged in');
+
+  log('info', `Daily download: no activity for ${s.idleSeconds} seconds, starting (${source})`);
   startRun(trigger);
 }
 
-async function keepSessionAlive() {
-  const s = await getSettings();
-  if (!s.keepSessionAlive || currentRun) return;
+// ---------------------------------------------------------------- auto refresh
+
+const CONTENT_ID = 'sfd-content';
+const SYNXIS_PATTERN = 'https://*.synxis.com/*';
+const isSynxisUrl = (url) => {
   try {
-    const res = await fetch(s.startUrl, { credentials: 'include', cache: 'no-store' });
-    const u = new URL(res.url);
-    const loggedOut =
-      u.origin !== new URL(s.startUrl).origin || /login|logon|signin|sign-in/i.test(u.pathname);
-    await chrome.storage.local.set({ keepAlive: { at: Date.now(), ok: res.ok && !loggedOut } });
-    if (loggedOut) log('warn', 'Keep-alive: SynXis looks logged out. Please log in again.');
+    return new URL(url).hostname.endsWith('synxis.com');
   } catch (e) {
-    await chrome.storage.local.set({ keepAlive: { at: Date.now(), ok: false } });
+    return false;
+  }
+};
+
+// The content script goes into SynXis tabs (pop-up answers) and into the tabs of
+// every auto-refresh site the extension may access.
+async function syncContentScript() {
+  const s = await getSettings();
+  const wanted = new Set();
+  if (s.answerPopups) wanted.add(SYNXIS_PATTERN);
+  if (s.autoRefreshEnabled) {
+    for (const rule of s.autoRefreshRules || []) {
+      const url = normalizeSiteUrl(rule.url);
+      if (url) wanted.add(isSynxisUrl(url) ? SYNXIS_PATTERN : originPattern(url));
+    }
+  }
+  const matches = [];
+  for (const pattern of wanted) {
+    if (await chrome.permissions.contains({ origins: [pattern] })) matches.push(pattern);
+    else log('warn', `Auto refresh: no permission for ${pattern} (save the settings again to allow it)`);
+  }
+  await chrome.scripting.unregisterContentScripts({ ids: [CONTENT_ID] }).catch(() => {});
+  if (!matches.length) return;
+  await chrome.scripting.registerContentScripts([
+    { id: CONTENT_ID, matches, js: ['content-autorefresh.js'], allFrames: true, runAt: 'document_idle' },
+  ]);
+  // Tabs that are already open get it right away.
+  for (const tab of await chrome.tabs.query({ url: matches })) {
+    chrome.scripting
+      .executeScript({ target: { tabId: tab.id, allFrames: true }, files: ['content-autorefresh.js'] })
+      .catch(() => {});
   }
 }
 
-// ---------------------------------------------------------------- toolbar icon
-
-// One click on the extension icon starts the download (default). The popup is
-// used only when one-click mode is turned off in Settings.
-async function applyIconMode() {
+async function tabConfig(sender) {
   const s = await getSettings();
-  await chrome.action.setPopup({ popup: s.oneClick ? '' : 'popup.html' });
-  await chrome.action.setTitle({
-    title: s.oneClick
-      ? 'Download SynXis Forecast now (right-click for settings)'
-      : 'SynXis Forecast Downloader',
-  });
+  const tabUrl = (sender.tab && sender.tab.url) || sender.url;
+  const rule = s.autoRefreshEnabled && sender.frameId === 0 ? findRule(s, tabUrl) : null;
+  const key = `refreshed:${sender.tab && sender.tab.id}`;
+  const refreshedAt = (await chrome.storage.session.get(key))[key] || 0;
+  return {
+    refreshSeconds: rule ? rule.seconds : null,
+    guard: s.answerPopups && isSynxisUrl(sender.url || tabUrl),
+    answerBankUntil: refreshedAt + 90000,
+  };
 }
+
+// The tab's timer ran out: reload it if the whole computer has been idle too.
+async function refreshDue(sender) {
+  const s = await getSettings();
+  const tab = sender.tab;
+  const rule = s.autoRefreshEnabled && tab ? findRule(s, tab.url) : null;
+  if (!rule) return { stop: true };
+  return refreshTab(tab, rule);
+}
+
+// Every 30 s: catches tabs whose own timer runs late or not at all (background,
+// sleeping or discarded tabs).
+async function refreshCheck() {
+  const s = await getSettings();
+  if (!s.autoRefreshEnabled || currentRun) return;
+  const patterns = [];
+  for (const rule of s.autoRefreshRules || []) {
+    const url = normalizeSiteUrl(rule.url);
+    if (url && (await chrome.permissions.contains({ origins: [originPattern(url)] }))) patterns.push(originPattern(url));
+  }
+  if (!patterns.length) return;
+  for (const tab of await chrome.tabs.query({ url: patterns })) {
+    const rule = findRule(s, tab.url);
+    if (!rule) continue;
+    if (tab.discarded) {
+      await refreshTab(tab, rule);
+      continue;
+    }
+    const res = await chrome.tabs.sendMessage(tab.id, { type: 'idleFor' }, { frameId: 0 }).catch(() => null);
+    if (res && res.ms >= rule.seconds * 1000) await refreshTab(tab, rule);
+  }
+}
+
+async function refreshTab(tab, rule) {
+  if (currentRun) return { retryMs: 30000 }; // never refresh in the middle of a download
+  if ((await idleState(rule.seconds)) === 'active') return { retryMs: 5000 };
+  await chrome.storage.session.set({ [`refreshed:${tab.id}`]: Date.now() });
+  await chrome.storage.local.set({ lastAutoRefresh: { at: Date.now(), url: tab.url } });
+  // Stay on the same page: load the tab's current address again (a reload would
+  // ask to resend a form after a post-back).
+  if (tab.url.includes('#')) await chrome.tabs.reload(tab.id);
+  else await chrome.tabs.update(tab.id, { url: tab.url });
+  return { reloaded: true };
+}
+
+// Keep the screen on and the computer awake (night runs, SynXis session).
+async function applyKeepAwake() {
+  const s = await getSettings();
+  if (s.keepAwake) chrome.power.requestKeepAwake('display');
+  else chrome.power.releaseKeepAwake();
+}
+
+// ---------------------------------------------------------------- toolbar icon
 
 function createIconMenu() {
   chrome.contextMenus.removeAll(() => {
@@ -757,21 +866,22 @@ function createIconMenu() {
       ['run', 'Download Forecast now'],
       ['cancel', 'Cancel the running download'],
       ['lastFile', 'Show last downloaded file'],
-      ['settings', 'Settings, status & log'],
+      ['settings', 'Settings'],
     ];
     for (const [id, title] of items) chrome.contextMenus.create({ id, title, contexts: ['action'] });
   });
 }
 
-function runFromIcon() {
+function runFromMenu() {
   const res = startRun('manual');
   if (!res.started) notify('Forecast download', res.reason);
 }
 
-chrome.action.onClicked.addListener(runFromIcon);
+// Clicking the icon opens Settings; downloads start only from "Download now".
+chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 
 chrome.contextMenus.onClicked.addListener(async (info) => {
-  if (info.menuItemId === 'run') runFromIcon();
+  if (info.menuItemId === 'run') runFromMenu();
   else if (info.menuItemId === 'cancel') {
     if (currentCtx) currentCtx.aborted = 'Cancelled by user';
   } else if (info.menuItemId === 'settings') chrome.runtime.openOptionsPage();
@@ -784,56 +894,81 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
 // ---------------------------------------------------------------- events
 
-chrome.runtime.onInstalled.addListener(async () => {
-  createIconMenu();
+async function setUpEverything() {
+  // Leftovers from version 1.x: fixed-time alarm, login ping, toolbar popup.
+  await chrome.alarms.clear('daily-run');
+  await chrome.alarms.clear('keep-alive');
+  await chrome.action.setPopup({ popup: '' });
   const s = await getSettings();
   await allowPopupsFor(new URL(s.startUrl).origin);
   await ensureAlarms();
+  await syncContentScript();
+  await applyKeepAwake();
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  createIconMenu();
+  await setUpEverything();
 });
 
+// Chrome started (also after the computer was restarted): everything is set up
+// again and the daily check runs a minute later.
 chrome.runtime.onStartup.addListener(async () => {
-  await applyIconMode();
-  await ensureAlarms();
-  // Give Chrome and the network a minute before a catch-up run.
+  await setUpEverything();
   await chrome.alarms.create(ALARM_STARTUP, { when: Date.now() + 60000 });
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === ALARM_DAILY) {
-    await checkDue('daily alarm');
-    await ensureAlarms();
-  } else if (alarm.name === ALARM_WATCHDOG) {
-    await checkDue('watchdog');
-  } else if (alarm.name === ALARM_STARTUP) {
-    await checkDue('Chrome started');
-  } else if (alarm.name === ALARM_KEEPALIVE) {
-    await keepSessionAlive();
-  }
+  if (alarm.name === ALARM_WATCHDOG) await checkDue('check every minute');
+  else if (alarm.name === ALARM_STARTUP) await checkDue('Chrome started');
+  else if (alarm.name === ALARM_REFRESH) await refreshCheck();
+});
+
+chrome.idle.onStateChanged.addListener((state) => {
+  if (state !== 'active') checkDue('computer inactive');
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.devIdleOverride) checkDue('inactivity changed');
   if (area !== 'local' || !changes.settings) return;
   ensureAlarms();
-  applyIconMode();
+  syncContentScript();
+  applyKeepAwake();
   const s = changes.settings.newValue;
   if (s && s.startUrl) allowPopupsFor(new URL(s.startUrl).origin);
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return false;
-  if (msg.type === 'runNow') {
-    sendResponse(startRun('manual'));
-  } else if (msg.type === 'cancelRun') {
-    if (currentCtx) currentCtx.aborted = 'Cancelled by user';
-    sendResponse({ ok: !!currentCtx });
-  } else if (msg.type === 'debugInfo') {
-    debugInfo().then(sendResponse, (e) => sendResponse({ error: e.message }));
+  const reply = (promise) => {
+    promise.then(sendResponse, (e) => sendResponse({ error: e.message }));
     return true;
-  } else if (msg.type === 'learnForecast') {
-    learnForecastUrl().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
-    return true;
+  };
+  switch (msg.type) {
+    case 'runNow':
+      sendResponse(startRun('manual'));
+      return false;
+    case 'cancelRun':
+      if (currentCtx) currentCtx.aborted = 'Cancelled by user';
+      sendResponse({ ok: !!currentCtx });
+      return false;
+    case 'debugInfo':
+      return reply(debugInfo());
+    case 'learnForecast':
+      return reply(learnForecastUrl());
+    case 'tabConfig':
+      return reply(tabConfig(sender));
+    case 'refreshDue':
+      return reply(refreshDue(sender));
+    case 'activity':
+      if (sender.tab) chrome.tabs.sendMessage(sender.tab.id, { type: 'activity' }, { frameId: 0 }).catch(() => {});
+      return false;
+    case 'popupAnswered':
+      log('info', msg.kind === 'bank' ? 'Auto: clicked NO on "open a Bank?"' : 'Auto: clicked KEEP SESSION ACTIVE');
+      return false;
+    default:
+      return false;
   }
-  return false;
 });
 
 // A fresh service worker means any run that was in progress is gone.
@@ -843,4 +978,4 @@ chrome.storage.local.get('runStatus').then(({ runStatus }) => {
   }
 });
 ensureAlarms();
-applyIconMode();
+applyKeepAwake();

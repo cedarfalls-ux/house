@@ -14,6 +14,8 @@
 //   none         - no menu at all (tests the saved Forecast page address)
 // Cookie "bankpopup=1" shows the "You do not have a Bank open" dialog after every
 // dashboard load; it blocks the menus until NO (or X) is clicked.
+// Cookie "sessionpopup=1" shows "Your session is about to expire" (LOGOUT / KEEP
+// SESSION ACTIVE) 3 seconds after load.
 // The dashboard also has "Next Year" dropdowns that are NOT the Forecast Date Range.
 
 import https from 'node:https';
@@ -35,7 +37,7 @@ const cookies = (req) =>
 const page = (title, body, head = '') =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
 
-function dashboard(menuMode, { bankPopup, sphDash }) {
+function dashboard(menuMode, { bankPopup, sessionPopup, sphDash }) {
   // Header + Reports mega menu. In "shadow" mode it lives inside a CLOSED shadow
   // root of a web component, like a design-system header; "none" has no menu.
   const menu = `
@@ -98,6 +100,10 @@ ${bankPopup ? `<div id="bankModal" style="position:fixed;inset:0;background:rgba
   <div style="background:#fff;padding:24px;border-radius:6px"><button id="bankX">&times;</button>
     <div><b>You do not have a Bank open</b><div>Would you like to open a Bank?</div></div>
     <button id="bankNo">NO</button> <button id="bankYes">YES</button></div></div>` : ''}
+${sessionPopup ? `<div id="sessModal" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center">
+  <div style="background:#fff;padding:24px;border-radius:6px"><div>&#9888; Your session is about to expire.</div>
+    <div style="height:12px;background:#4c4;width:120px;margin:8px 0"></div>
+    <button id="sessLogout">LOGOUT</button> <button id="sessKeep">KEEP SESSION ACTIVE</button></div></div>` : ''}
 <iframe id="content" src="about:blank"></iframe>
 <footer>&copy; 2026 Aven Hospitality. All rights reserved. <a href="javascript:void(0)" id="ver">SynXis Property Hub 4.30.0.0.</a></footer>
 <script>
@@ -113,6 +119,13 @@ ${bankPopup ? `<div id="bankModal" style="position:fixed;inset:0;background:rgba
     document.getElementById('bankNo').addEventListener('click', close);
     document.getElementById('bankX').addEventListener('click', close);
     document.getElementById('bankYes').addEventListener('click', () => { location.href = '/CC/OpenBank.aspx'; });
+  }
+  window.keptAlive = false;
+  const sess = document.getElementById('sessModal');
+  if (sess) {
+    setTimeout(() => { sess.style.display = 'flex'; }, 3000);
+    document.getElementById('sessKeep').addEventListener('click', () => { sess.style.display = 'none'; window.keptAlive = true; });
+    document.getElementById('sessLogout').addEventListener('click', () => { location.href = '/CC/Login.aspx?out=1'; });
   }
   function wire(root) {
     const mega = root.getElementById('mega');
@@ -255,7 +268,7 @@ const server = https.createServer({ cert: fs.readFileSync(certFile), key: fs.rea
   if (url.pathname === '/__export_log') return send(200, JSON.stringify(exportLog), { 'Content-Type': 'application/json' });
   if (!loggedIn) return send(302, '', { Location: '/CC/Login.aspx' });
 
-  if (url.pathname === '/CC/default.aspx') return send(200, dashboard(c.menumode, { bankPopup: c.bankpopup === '1', sphDash: url.searchParams.get('dash') === 'sph' }));
+  if (url.pathname === '/CC/default.aspx') return send(200, dashboard(c.menumode, { bankPopup: c.bankpopup === '1', sessionPopup: c.sessionpopup === '1', sphDash: url.searchParams.get('dash') === 'sph' }));
   if (url.pathname === '/CC/reports/criteria.aspx') return send(200, criteria(url));
   if (url.pathname === '/CC/reports/ReportViewerRun.aspx') return send(200, reportViewer(url, c.rvmode || 'sys'));
   if (url.pathname === '/CC/Reserved.ReportViewerWebControl.axd') {
