@@ -1,0 +1,117 @@
+import {
+  DEFAULT_SETTINGS,
+  DATE_RANGES,
+  getSettings,
+  saveSettings,
+  buildTargetPath,
+  sanitizeFolder,
+  isNightTime,
+  nextScheduledRun,
+  formatDateTime,
+} from './common.js';
+
+const $ = (id) => document.getElementById(id);
+const CHECKS = ['scheduleEnabled', 'catchUpIfMissed', 'notifications', 'keepSessionAlive', 'keepWindowOnFailure'];
+const TEXTS = ['scheduleTime', 'folder', 'fileNameTemplate', 'conflictAction', 'dateRange', 'startUrl'];
+const NUMBERS = ['maxAttempts', 'retryMinutes', 'reportTimeoutSec'];
+
+for (const r of DATE_RANGES) $('dateRange').append(new Option(r, r));
+
+function readForm() {
+  const s = {};
+  for (const k of CHECKS) s[k] = $(k).checked;
+  for (const k of TEXTS) s[k] = $(k).value.trim();
+  for (const k of NUMBERS) s[k] = Number($(k).value);
+  return s;
+}
+
+function fillForm(s) {
+  for (const k of CHECKS) $(k).checked = !!s[k];
+  for (const k of TEXTS) $(k).value = s[k];
+  for (const k of NUMBERS) $(k).value = s[k];
+  updatePreview();
+}
+
+function updatePreview() {
+  const s = { ...DEFAULT_SETTINGS, ...readForm() };
+  $('pathPreview').textContent = `Downloads\\${buildTargetPath(s).replace(/\//g, '\\')}`;
+  $('nextRunText').textContent =
+    s.scheduleEnabled && isNightTime(s.scheduleTime) ? `Next run: ${formatDateTime(nextScheduledRun(s).getTime())}` : '';
+}
+
+function validate(s) {
+  if (!isNightTime(s.scheduleTime)) return 'Time must be between 12:00 AM and 5:59 AM.';
+  if (/^[a-z]:|^[\\/]{2}/i.test(s.folder)) {
+    return 'Enter a folder inside Downloads (e.g. "SynXis Forecast"), not a full path like D:\\Reports. See the note below for another drive.';
+  }
+  if (!sanitizeFolder(s.folder)) return 'Please enter a folder name.';
+  if (!s.fileNameTemplate) return 'Please enter a file name.';
+  if (!(s.maxAttempts >= 1 && s.maxAttempts <= 10)) return 'Tries per night must be 1–10.';
+  if (!(s.retryMinutes >= 5 && s.retryMinutes <= 180)) return 'Minutes between tries must be 5–180.';
+  if (!(s.reportTimeoutSec >= 30 && s.reportTimeoutSec <= 900)) return 'Report timeout must be 30–900 seconds.';
+  try {
+    const u = new URL(s.startUrl);
+    if (u.protocol !== 'https:' || !u.hostname.endsWith('synxis.com')) throw new Error();
+  } catch (e) {
+    return 'SynXis address must be an https://…synxis.com address.';
+  }
+  return null;
+}
+
+function showStatus(text, cls) {
+  $('status').className = `small ${cls || ''}`;
+  $('status').textContent = text;
+}
+
+$('save').addEventListener('click', async () => {
+  const s = readForm();
+  const error = validate(s);
+  if (error) return showStatus(error, 'err');
+  s.folder = sanitizeFolder(s.folder);
+  await saveSettings(s);
+  fillForm(await getSettings());
+  showStatus('Saved ✔', 'ok');
+});
+
+$('runNow').addEventListener('click', async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'runNow' });
+  showStatus(res && res.started ? 'Download started – watch the log below.' : (res && res.reason) || '', res && res.started ? 'ok' : 'err');
+});
+
+document.querySelectorAll('input, select').forEach((el) => el.addEventListener('input', updatePreview));
+
+$('openDownloadSettings').addEventListener('click', () => chrome.tabs.create({ url: 'chrome://settings/downloads' }));
+$('openSystemSettings').addEventListener('click', () => chrome.tabs.create({ url: 'chrome://settings/system' }));
+$('openDownloads').addEventListener('click', () => chrome.downloads.showDefaultFolder());
+
+function logLine(entry) {
+  const d = new Date(entry.t);
+  const div = document.createElement('div');
+  div.className = entry.level === 'error' ? 'err' : entry.level === 'warn' ? 'warn' : '';
+  div.textContent = `${d.toLocaleDateString()} ${d.toLocaleTimeString()}  ${entry.msg}`;
+  return div;
+}
+
+async function renderLogs() {
+  const { logs = [] } = await chrome.storage.local.get('logs');
+  const box = $('logs');
+  box.replaceChildren(...logs.slice().reverse().map(logLine));
+  if (!logs.length) box.textContent = 'No activity yet.';
+}
+
+$('clearLogs').addEventListener('click', async () => {
+  await chrome.storage.local.set({ logs: [] });
+});
+$('copyLogs').addEventListener('click', async () => {
+  const { logs = [] } = await chrome.storage.local.get('logs');
+  const text = logs.map((e) => `${new Date(e.t).toLocaleString()} [${e.level}] ${e.msg}`).join('\n');
+  await navigator.clipboard.writeText(text);
+  showStatus('Log copied', 'ok');
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.logs) renderLogs();
+});
+
+getSettings().then(fillForm);
+renderLogs();

@@ -1,0 +1,359 @@
+// Functions injected into SynXis pages with chrome.scripting.executeScript.
+// Each exported function is serialized on its own, so everything it needs must
+// live inside the function body (no imports, no outer helpers).
+
+/**
+ * Runs in the content-script (isolated) world of one frame.
+ * @param {string} cmd  scan | act | reportScan | fetchExport | clickCsv
+ * @param {object} args command arguments
+ */
+export function pageAgent(cmd, args) {
+  args = args || {};
+  const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'OPTION', 'SELECT', 'svg', 'SVG', 'path']);
+  const CLICKABLE =
+    'a,button,[role="button"],[role="menuitem"],[role="tab"],[role="link"],[role="option"],[role="treeitem"],[onclick],input[type="button"],input[type="submit"],summary';
+
+  function isVisible(el) {
+    if (!el || !el.isConnected) return false;
+    if (!el.getClientRects().length) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    if (r.right < -1000 || r.bottom < -1000) return false;
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
+      if (parseFloat(cs.opacity) === 0) return false;
+    }
+    return true;
+  }
+
+  // Elements with short text, normalized once per call.
+  let cache = null;
+  function textElements() {
+    if (cache) return cache;
+    cache = [];
+    const els = document.body ? document.body.getElementsByTagName('*') : [];
+    for (const el of els) {
+      if (SKIP.has(el.tagName)) continue;
+      let raw;
+      if (el.tagName === 'INPUT') {
+        raw = el.type === 'button' || el.type === 'submit' ? el.value : '';
+      } else {
+        raw = el.textContent;
+      }
+      if (!raw || raw.length > 150) continue;
+      const t = norm(raw);
+      if (t) cache.push({ el, t });
+    }
+    return cache;
+  }
+
+  // Deepest elements whose text satisfies pred (skips wrappers around a match).
+  function findText(pred, { visibleOnly = true } = {}) {
+    const matched = textElements().filter((x) => pred(x.t, x.el));
+    const set = new Set(matched.map((x) => x.el));
+    return matched
+      .filter((x) => ![...x.el.children].some((c) => set.has(c)))
+      .map((x) => x.el)
+      .filter((el) => !visibleOnly || isVisible(el));
+  }
+
+  function clickTarget(el) {
+    let n = el;
+    for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
+      if (n.matches && n.matches(CLICKABLE)) return n;
+    }
+    return el;
+  }
+
+  const inHeading = (el) => !!el.closest('h1,h2,h3,h4,h5,h6');
+  const inBreadcrumb = (el) =>
+    !!el.closest('[class*="breadcrumb" i],[id*="breadcrumb" i],[aria-label*="breadcrumb" i]');
+
+  function fire(el, type) {
+    const r = el.getBoundingClientRect();
+    const init = {
+      bubbles: !type.endsWith('enter'),
+      cancelable: true,
+      view: window,
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2,
+      button: 0,
+    };
+    const Ctor = type.startsWith('pointer') && typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+    el.dispatchEvent(new Ctor(type, init));
+  }
+  function hover(el) {
+    for (const t of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']) fire(el, t);
+  }
+  function click(el) {
+    hover(el);
+    fire(el, 'pointerdown');
+    fire(el, 'mousedown');
+    try {
+      el.focus({ preventScroll: true });
+    } catch (e) {
+      /* not focusable */
+    }
+    fire(el, 'pointerup');
+    fire(el, 'mouseup');
+    el.click();
+  }
+
+  function hasLoginForm() {
+    return [...document.querySelectorAll('input[type="password"]')].some(isVisible);
+  }
+
+  // ----- Control Center navigation -----
+
+  function rangeSelect(range) {
+    const want = norm(range);
+    const selects = [...document.querySelectorAll('select')].filter((s) =>
+      [...s.options].some((o) => norm(o.text) === want),
+    );
+    return selects.find(isVisible) || selects[0] || null;
+  }
+
+  function forecastLinks(visibleOnly) {
+    const els = findText((t) => t === 'forecast', { visibleOnly }).filter(
+      (el) => !inHeading(el) && !inBreadcrumb(el),
+    );
+    // "Strong" = the Forecast link sitting in the SPH Front Office list, next to
+    // "Forecast By Market Segment" / "Forecast By Rate Plan". The shared parent must
+    // not hold another "Forecast" link, so a Forecast in a different menu section
+    // never borrows these neighbours.
+    const neighbours = findText((t) => t === 'forecast by rate plan' || t === 'forecast by market segment', {
+      visibleOnly,
+    });
+    const strong = els.filter((el) => {
+      let n = el.parentElement;
+      for (let i = 0; i < 6 && n; i++, n = n.parentElement) {
+        if (els.some((other) => other !== el && n.contains(other))) return false;
+        if (neighbours.some((x) => n.contains(x))) return true;
+      }
+      return false;
+    });
+    return { strong, weak: els };
+  }
+
+  function sphLinks(visibleOnly) {
+    return findText((t) => t.startsWith('synxis property hub') && t.length < 60, { visibleOnly }).filter(
+      (el) => !inHeading(el) && !inBreadcrumb(el),
+    );
+  }
+
+  function reportsNav(visibleOnly) {
+    const els = findText((t) => t === 'reports', { visibleOnly }).filter((el) => !inHeading(el) && !inBreadcrumb(el));
+    // The top navigation item is the highest one on the page.
+    return els.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  }
+
+  function generateButtons() {
+    return findText((t) => t === 'generate report' || t === 'generate', { visibleOnly: true });
+  }
+
+  function scan() {
+    const hidden = !!args.allowHidden;
+    const sel = rangeSelect(args.range);
+    const fc = forecastLinks(!hidden);
+    return {
+      url: location.href,
+      loginForm: hasLoginForm(),
+      rangeSelect: !!sel,
+      rangeSelected: sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.trim() : null,
+      rangeOptions: sel ? [...sel.options].map((o) => o.text.trim()) : null,
+      forecastStrong: fc.strong.length > 0,
+      forecastWeak: fc.weak.length > 0,
+      sphLink: sphLinks(!hidden).length > 0,
+      reportsNav: reportsNav(!hidden).length > 0,
+      generateBtn: generateButtons().length > 0,
+    };
+  }
+
+  function act() {
+    const hidden = !!args.allowHidden;
+    switch (args.action) {
+      case 'clickForecast': {
+        const fc = forecastLinks(!hidden);
+        const el = (args.strongOnly ? fc.strong : fc.strong.concat(fc.weak))[0];
+        if (!el) return { ok: false, error: 'Forecast link not found' };
+        click(clickTarget(el));
+        return { ok: true };
+      }
+      case 'clickSPH': {
+        const el = sphLinks(!hidden)[0];
+        if (!el) return { ok: false, error: 'SynXis Property Hub (SPH) not found' };
+        click(clickTarget(el));
+        return { ok: true };
+      }
+      case 'openReports': {
+        const el = reportsNav(!hidden)[0];
+        if (!el) return { ok: false, error: 'Reports menu not found' };
+        const target = clickTarget(el);
+        if (args.click) click(target);
+        else hover(target);
+        return { ok: true };
+      }
+      case 'selectRange': {
+        const sel = rangeSelect(args.range);
+        if (!sel) return { ok: false, error: 'Date Range dropdown not found' };
+        const opt = [...sel.options].find((o) => norm(o.text) === norm(args.range));
+        if (!opt) return { ok: false, error: `"${args.range}" is not in the Date Range dropdown` };
+        try {
+          sel.focus();
+        } catch (e) {
+          /* ignore */
+        }
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+        setter.call(sel, opt.value);
+        sel.selectedIndex = opt.index;
+        opt.selected = true;
+        sel.dispatchEvent(new Event('input', { bubbles: true }));
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        try {
+          sel.blur();
+        } catch (e) {
+          /* ignore */
+        }
+        return { ok: true };
+      }
+      case 'clickGenerate': {
+        const el = generateButtons()[0];
+        if (!el) return { ok: false, error: 'Generate Report button not found' };
+        click(clickTarget(el));
+        return { ok: true };
+      }
+      default:
+        return { ok: false, error: `Unknown action ${args.action}` };
+    }
+  }
+
+  // ----- Report viewer window -----
+
+  function exportUrlFromHtml() {
+    const m = /"ExportUrlBase"\s*:\s*"((?:[^"\\]|\\.)+)"/.exec(document.documentElement.innerHTML);
+    if (!m) return null;
+    try {
+      return JSON.parse(`"${m[1]}"`);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function csvLink() {
+    const byHandler = [...document.querySelectorAll('a[onclick],[onclick]')].find((el) =>
+      /exportReport\(\s*['"]CSV['"]\s*\)/i.test(el.getAttribute('onclick') || ''),
+    );
+    if (byHandler) return byHandler;
+    return findText((t) => t.startsWith('csv (comma delimited)') || t === 'csv', { visibleOnly: false })[0] || null;
+  }
+
+  function reportScan() {
+    const text = document.body ? norm(document.body.innerText.slice(0, 30000)) : '';
+    const loading = findText((t) => t === 'loading...' || t === 'loading', { visibleOnly: true }).length > 0;
+    const err = /(an error (has )?occurred[^.]*report processing[^.]*\.?|report processing error[^.]*)/.exec(text);
+    return {
+      url: location.href,
+      loginForm: hasLoginForm(),
+      isReportViewer:
+        /reportviewer/i.test(location.href) || !!document.querySelector('[id*="ReportViewer" i],[class*="ReportViewer" i]'),
+      reportTitle: text.includes('forecast report'),
+      loadingVisible: loading,
+      csvLink: !!csvLink(),
+      exportUrlFromHtml: exportUrlFromHtml(),
+      errorText: err ? err[0].slice(0, 200) : null,
+    };
+  }
+
+  async function fetchExport() {
+    let res;
+    try {
+      res = await fetch(args.url, { credentials: 'include', cache: 'no-store' });
+    } catch (e) {
+      return { ok: false, error: `Download request failed: ${e && e.message ? e.message : e}` };
+    }
+    if (!res.ok) return { ok: false, error: `Server answered HTTP ${res.status}` };
+    const contentType = res.headers.get('content-type') || '';
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!bytes.length) return { ok: false, error: 'Server returned an empty file' };
+
+    let encoding = 'utf-8';
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) encoding = 'utf-16le';
+    else if (bytes[0] === 0xfe && bytes[1] === 0xff) encoding = 'utf-16be';
+    const text = new TextDecoder(encoding).decode(bytes).replace(/^﻿/, '');
+    const head = text.trimStart().slice(0, 300);
+    if (/text\/html/i.test(contentType) || /^<(!doctype|html|head|body|\?xml)/i.test(head)) {
+      return {
+        ok: false,
+        error: 'Server returned a web page instead of the CSV (session may have expired)',
+        preview: head.slice(0, 150),
+      };
+    }
+
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return {
+      ok: true,
+      b64: btoa(bin),
+      size: bytes.length,
+      encoding,
+      contentType,
+      lines: text.split(/\r\n|\n|\r/).filter((l) => l.trim()).length,
+      preview: head.slice(0, 120),
+    };
+  }
+
+  switch (cmd) {
+    case 'scan':
+      return scan();
+    case 'act':
+      return act();
+    case 'reportScan':
+      return reportScan();
+    case 'fetchExport':
+      return fetchExport();
+    case 'clickCsv': {
+      const el = csvLink();
+      if (!el) return { ok: false, error: 'CSV export link not found' };
+      el.click();
+      return { ok: true };
+    }
+    default:
+      return { error: `Unknown command ${cmd}` };
+  }
+}
+
+/**
+ * Runs in the page's MAIN world so it can reach the ASP.NET ReportViewer client
+ * object and read the export URL it uses for "Export > CSV".
+ */
+export function mainWorldViewerInfo() {
+  const out = { found: false, frameUrl: location.href };
+  try {
+    const app = window.Sys && window.Sys.Application;
+    if (app && typeof app.getComponents === 'function') {
+      for (const c of app.getComponents()) {
+        if (!c || typeof c.exportReport !== 'function') continue;
+        out.found = true;
+        try {
+          if (typeof c.get_isLoading === 'function') out.loading = !!c.get_isLoading();
+        } catch (e) {
+          /* older viewer */
+        }
+        try {
+          const iv = typeof c._getInternalViewer === 'function' ? c._getInternalViewer() : null;
+          if (iv && typeof iv.ExportUrlBase === 'string') out.exportUrlBase = iv.ExportUrlBase;
+        } catch (e) {
+          /* older viewer */
+        }
+        break;
+      }
+    }
+  } catch (e) {
+    out.error = String((e && e.message) || e);
+  }
+  return out;
+}

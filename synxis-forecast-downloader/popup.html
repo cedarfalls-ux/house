@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SynXis Forecast Downloader</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      body {
+        width: 360px;
+      }
+      .card {
+        margin: 10px 12px;
+      }
+      .label {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin-bottom: 2px;
+      }
+      .block + .block {
+        margin-top: 10px;
+      }
+      .actions .btn {
+        flex: 1;
+        padding: 7px 4px;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <img src="icons/icon48.png" alt="" />
+      <h1>SynXis Forecast Downloader</h1>
+    </div>
+
+    <div class="card">
+      <div id="idleBox">
+        <button id="runNow" class="btn primary block">Download Forecast now</button>
+        <div class="small muted" style="margin-top: 6px" id="rangeNote"></div>
+      </div>
+      <div id="runningBox" class="hidden">
+        <div class="row"><span class="spinner"></span><strong>Running…</strong></div>
+        <div id="runStep" class="small muted" style="margin: 6px 0 10px"></div>
+        <button id="cancelRun" class="btn danger">Cancel</button>
+      </div>
+      <div id="msg" class="small err" style="margin-top: 6px"></div>
+    </div>
+
+    <div class="card">
+      <div class="block">
+        <div class="label">Last run</div>
+        <div id="lastRun" class="muted">Never</div>
+      </div>
+      <div class="block">
+        <div class="label">Next automatic run</div>
+        <div id="nextRun">—</div>
+      </div>
+      <div class="block">
+        <div class="label">Save folder</div>
+        <div id="folder" class="path"></div>
+      </div>
+      <div id="sessionBlock" class="block hidden">
+        <div class="label">SynXis login check</div>
+        <div id="session"></div>
+      </div>
+    </div>
+
+    <div class="row actions" style="margin: 0 12px 12px; flex-wrap: nowrap">
+      <button id="openSettings" class="btn">Settings</button>
+      <button id="showFile" class="btn">Show last file</button>
+      <button id="openFolder" class="btn">Downloads</button>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
