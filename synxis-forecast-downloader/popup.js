@@ -23,7 +23,7 @@ async function render() {
   $('idleBox').classList.toggle('hidden', running);
   $('runningBox').classList.toggle('hidden', !running);
   $('runStep').textContent = running ? runStatus.step || '' : '';
-  $('rangeNote').textContent = `Forecast · Date Range: ${settings.dateRange} · CSV`;
+  $('rangeNote').textContent = `Forecast · ${settings.dateRange} · CSV — runs in your open SynXis tab`;
 
   const last = $('lastRun');
   if (!lastRun) {

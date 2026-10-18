@@ -12,7 +12,7 @@ import {
 
 const $ = (id) => document.getElementById(id);
 const CHECKS = ['scheduleEnabled', 'catchUpIfMissed', 'notifications', 'keepSessionAlive', 'keepWindowOnFailure'];
-const TEXTS = ['scheduleTime', 'folder', 'fileNameTemplate', 'conflictAction', 'dateRange', 'startUrl'];
+const TEXTS = ['scheduleTime', 'folder', 'fileNameTemplate', 'conflictAction', 'dateRange', 'startUrl', 'forecastUrl'];
 const NUMBERS = ['maxAttempts', 'retryMinutes', 'reportTimeoutSec'];
 
 for (const r of DATE_RANGES) $('dateRange').append(new Option(r, r));
@@ -49,12 +49,16 @@ function validate(s) {
   if (!(s.maxAttempts >= 1 && s.maxAttempts <= 10)) return 'Tries per night must be 1–10.';
   if (!(s.retryMinutes >= 5 && s.retryMinutes <= 180)) return 'Minutes between tries must be 5–180.';
   if (!(s.reportTimeoutSec >= 30 && s.reportTimeoutSec <= 900)) return 'Report timeout must be 30–900 seconds.';
-  try {
-    const u = new URL(s.startUrl);
-    if (u.protocol !== 'https:' || !u.hostname.endsWith('synxis.com')) throw new Error();
-  } catch (e) {
-    return 'SynXis address must be an https://…synxis.com address.';
-  }
+  const isSynxis = (url) => {
+    try {
+      const u = new URL(url);
+      return u.protocol === 'https:' && u.hostname.endsWith('synxis.com');
+    } catch (e) {
+      return false;
+    }
+  };
+  if (!isSynxis(s.startUrl)) return 'SynXis address must be an https://…synxis.com address.';
+  if (s.forecastUrl && !isSynxis(s.forecastUrl)) return 'Forecast page address must be an https://…synxis.com address.';
   return null;
 }
 
@@ -98,6 +102,29 @@ async function renderLogs() {
   box.replaceChildren(...logs.slice().reverse().map(logLine));
   if (!logs.length) box.textContent = 'No activity yet.';
 }
+
+$('learnForecast').addEventListener('click', async () => {
+  $('learnStatus').textContent = 'Looking…';
+  const res = await chrome.runtime.sendMessage({ type: 'learnForecast' });
+  $('learnStatus').className = res && res.ok ? 'ok' : 'err';
+  $('learnStatus').textContent = res && res.ok ? 'Saved ✔' : (res && res.error) || 'Failed';
+  if (res && res.ok) $('forecastUrl').value = res.url;
+});
+
+$('copyDebug').addEventListener('click', async () => {
+  showStatus('Collecting debug info…');
+  const info = await chrome.runtime.sendMessage({ type: 'debugInfo' });
+  const text = JSON.stringify(info, null, 1);
+  $('debugBox').value = text;
+  $('debugBox').classList.remove('hidden');
+  try {
+    await navigator.clipboard.writeText(text);
+    showStatus('Debug info copied – paste it in the chat', 'ok');
+  } catch (e) {
+    $('debugBox').select();
+    showStatus('Select the text in the box below and copy it (Ctrl+C)', 'warn');
+  }
+});
 
 $('clearLogs').addEventListener('click', async () => {
   await chrome.storage.local.set({ logs: [] });

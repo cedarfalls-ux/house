@@ -7,13 +7,18 @@ into a folder you choose.
 
 What it does, step by step, just like you would by hand:
 
-1. Opens `https://controlcenter-p2.synxis.com/CC/default.aspx` in a new window
+1. Uses the **SynXis tab you already have open** (it opens a new tab only if no
+   SynXis tab is open, and closes that tab again at the end)
 2. **Reports** → **SynXis Property Hub (SPH)** → **Forecast**
 3. **Date Range** dropdown → **Next Year**
 4. **GENERATE REPORT**
 5. In the report pop-up: **Export → CSV (comma delimited)**
 6. Saves the file as `Downloads\SynXis Forecast\Forecast_NextYear_2026-10-18.csv`
-7. Closes the report pop-up and the SynXis window
+7. Closes the report pop-up. Your SynXis tab stays open on the Forecast page.
+
+If the Reports menu can't be clicked on the current page, it reloads the SynXis
+home page and tries again, and after that opens the saved **Forecast page
+address** (see Settings → Report) if you saved one.
 
 ## Install (one time, about 2 minutes)
 
@@ -25,9 +30,12 @@ What it does, step by step, just like you would by hand:
 4. Click **Load unpacked** and select the `synxis-forecast-downloader` folder.
 5. Click the puzzle icon in the toolbar and **pin** "SynXis Forecast Auto Downloader".
 6. Log in to SynXis in this same Chrome profile (select the right hotel).
-7. Click the extension icon → **Download Forecast now** to test it. The window
-   opens, does everything by itself, and closes. The popup shows where the file
-   was saved.
+7. Click the extension icon → **Download Forecast now** to test it. Your SynXis
+   tab does everything by itself; the report pop-up opens and closes. The popup
+   shows where the file was saved.
+
+**Updating to a new version:** replace the files in the folder, then click the
+reload (↻) button on the extension in `chrome://extensions`.
 
 ## Settings (extension icon → Settings)
 
@@ -41,6 +49,7 @@ What it does, step by step, just like you would by hand:
 | File name | `Forecast_{range}_{date}` | Tokens: `{date}` `{time}` `{range}` `{YYYY}` `{MM}` `{DD}` `{HH}` `{mm}` |
 | If file exists | Keep both | Or **Replace** (e.g. file name `Forecast_latest` + Replace = always one up-to-date file) |
 | Date Range | Next Year | Any value from the SynXis dropdown |
+| Forecast page address (backup) | empty | Open the Forecast report in SynXis, then click **Remember from open SynXis tab** |
 
 ### Saving on another drive (e.g. `D:\Reports`)
 
@@ -64,15 +73,19 @@ in Settings). The extension's folder is then created inside that location.
 
 ## Troubleshooting
 
-- **Settings → Activity log** shows every step of every run (Copy button to
-  share it). A red **!** on the extension icon means the last run failed.
-- Turn on **Leave the SynXis window open when a run fails** to see exactly where
-  it stopped.
+- **Settings → Activity log** shows every step of every run. A red **!** on the
+  extension icon means the last run failed.
+- **Copy debug info** (Settings → Activity log) collects what the extension can
+  see on the open SynXis tab (menu items, frames, dropdowns, last error, log).
+  Keep SynXis open, click it, and send the copied text. It contains no
+  passwords.
+- Turn on **Leave the report pop-up / new SynXis tab open when a run fails** to
+  see exactly where it stopped.
 - *"Report window did not open"*: the extension allows pop-ups for SynXis
   automatically. If it still happens, allow pop-ups for
   `controlcenter-p2.synxis.com` in Chrome's site settings.
-- *"Could not open the Forecast report page"*: SynXis changed its menu. Send the
-  activity log.
+- *"Could not open the Forecast report page"*: open the Forecast report by hand,
+  click **Remember from open SynXis tab** in Settings, and send the debug info.
 - If Chrome asks *where to save* for this report, turn off *"Ask where to save
   each file before downloading"* in chrome://settings/downloads (normally the
   extension saves without asking).

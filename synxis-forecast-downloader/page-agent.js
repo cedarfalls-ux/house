@@ -4,15 +4,55 @@
 
 /**
  * Runs in the content-script (isolated) world of one frame.
- * @param {string} cmd  scan | act | reportScan | fetchExport | clickCsv
+ * @param {string} cmd  scan | act | reportScan | fetchExport | clickCsv | diagnose
  * @param {object} args command arguments
  */
 export function pageAgent(cmd, args) {
   args = args || {};
   const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'OPTION', 'SELECT', 'svg', 'SVG', 'path']);
+  const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'OPTION', 'SELECT', 'TITLE', 'svg', 'SVG', 'path']);
   const CLICKABLE =
     'a,button,[role="button"],[role="menuitem"],[role="tab"],[role="link"],[role="option"],[role="treeitem"],[onclick],input[type="button"],input[type="submit"],summary';
+
+  // Modern SynXis (Aven) screens are built from web components, so menus can sit
+  // inside shadow roots. Content scripts may open closed ones via chrome.dom.
+  function shadowOf(el) {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.dom && chrome.dom.openOrClosedShadowRoot) {
+        return chrome.dom.openOrClosedShadowRoot(el);
+      }
+    } catch (e) {
+      /* not a shadow host */
+    }
+    return el.shadowRoot || null;
+  }
+  const parentOf = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || null;
+  const inShadow = (el) => el.getRootNode() !== document;
+
+  // Every element of the frame, including those inside shadow roots.
+  let allCache = null;
+  let shadowRoots = 0;
+  function allElements() {
+    if (allCache) return allCache;
+    allCache = [];
+    const stack = [document.body || document.documentElement];
+    while (stack.length) {
+      for (const el of stack.pop().querySelectorAll('*')) {
+        allCache.push(el);
+        const root = shadowOf(el);
+        if (root) {
+          shadowRoots++;
+          stack.push(root);
+        }
+      }
+    }
+    return allCache;
+  }
+  const deepQueryAll = (selector) => allElements().filter((el) => el.matches(selector));
+  function deepContains(ancestor, node) {
+    for (let n = node; n; n = parentOf(n)) if (n === ancestor) return true;
+    return false;
+  }
 
   function isVisible(el) {
     if (!el || !el.isConnected) return false;
@@ -20,7 +60,7 @@ export function pageAgent(cmd, args) {
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return false;
     if (r.right < -1000 || r.bottom < -1000) return false;
-    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+    for (let n = el; n && n.nodeType === 1; n = parentOf(n)) {
       const cs = getComputedStyle(n);
       if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
       if (parseFloat(cs.opacity) === 0) return false;
@@ -33,14 +73,14 @@ export function pageAgent(cmd, args) {
   function textElements() {
     if (cache) return cache;
     cache = [];
-    const els = document.body ? document.body.getElementsByTagName('*') : [];
-    for (const el of els) {
+    for (const el of allElements()) {
       if (SKIP.has(el.tagName)) continue;
       let raw;
       if (el.tagName === 'INPUT') {
         raw = el.type === 'button' || el.type === 'submit' ? el.value : '';
       } else {
         raw = el.textContent;
+        if (!norm(raw) && el.matches(CLICKABLE)) raw = el.getAttribute('aria-label') || el.title || '';
       }
       if (!raw || raw.length > 150) continue;
       const t = norm(raw);
@@ -61,10 +101,12 @@ export function pageAgent(cmd, args) {
 
   function clickTarget(el) {
     let n = el;
-    for (let i = 0; i < 4 && n; i++, n = n.parentElement) {
+    for (let i = 0; i < 4 && n; i++, n = parentOf(n)) {
       if (n.matches && n.matches(CLICKABLE)) return n;
     }
-    return el;
+    // Text rendered by a web component: click the real link/button inside it.
+    const root = shadowOf(el);
+    return (root && root.querySelector(CLICKABLE)) || el;
   }
 
   const inHeading = (el) => !!el.closest('h1,h2,h3,h4,h5,h6');
@@ -75,6 +117,7 @@ export function pageAgent(cmd, args) {
     const r = el.getBoundingClientRect();
     const init = {
       bubbles: !type.endsWith('enter'),
+      composed: true, // let the event leave shadow roots, like a real mouse event
       cancelable: true,
       view: window,
       clientX: r.left + r.width / 2,
@@ -85,7 +128,12 @@ export function pageAgent(cmd, args) {
     el.dispatchEvent(new Ctor(type, init));
   }
   function hover(el) {
-    for (const t of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'pointermove', 'mousemove']) fire(el, t);
+    for (const t of ['pointerover', 'mouseover', 'pointermove', 'mousemove']) fire(el, t);
+    // A real pointer "enters" every ancestor too; hover menus often listen there.
+    for (let n = el, i = 0; n && i < 6; n = parentOf(n), i++) {
+      fire(n, 'pointerenter');
+      fire(n, 'mouseenter');
+    }
   }
   function click(el) {
     hover(el);
@@ -102,14 +150,14 @@ export function pageAgent(cmd, args) {
   }
 
   function hasLoginForm() {
-    return [...document.querySelectorAll('input[type="password"]')].some(isVisible);
+    return deepQueryAll('input[type="password"]').some(isVisible);
   }
 
   // ----- Control Center navigation -----
 
   function rangeSelect(range) {
     const want = norm(range);
-    const selects = [...document.querySelectorAll('select')].filter((s) =>
+    const selects = deepQueryAll('select').filter((s) =>
       [...s.options].some((o) => norm(o.text) === want),
     );
     return selects.find(isVisible) || selects[0] || null;
@@ -127,10 +175,10 @@ export function pageAgent(cmd, args) {
       visibleOnly,
     });
     const strong = els.filter((el) => {
-      let n = el.parentElement;
-      for (let i = 0; i < 6 && n; i++, n = n.parentElement) {
-        if (els.some((other) => other !== el && n.contains(other))) return false;
-        if (neighbours.some((x) => n.contains(x))) return true;
+      let n = parentOf(el);
+      for (let i = 0; i < 6 && n; i++, n = parentOf(n)) {
+        if (els.some((other) => other !== el && deepContains(n, other))) return false;
+        if (neighbours.some((x) => deepContains(n, x))) return true;
       }
       return false;
     });
@@ -209,7 +257,7 @@ export function pageAgent(cmd, args) {
         setter.call(sel, opt.value);
         sel.selectedIndex = opt.index;
         opt.selected = true;
-        sel.dispatchEvent(new Event('input', { bubbles: true }));
+        sel.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
         sel.dispatchEvent(new Event('change', { bubbles: true }));
         try {
           sel.blur();
@@ -242,7 +290,7 @@ export function pageAgent(cmd, args) {
   }
 
   function csvLink() {
-    const byHandler = [...document.querySelectorAll('a[onclick],[onclick]')].find((el) =>
+    const byHandler = deepQueryAll('[onclick]').find((el) =>
       /exportReport\(\s*['"]CSV['"]\s*\)/i.test(el.getAttribute('onclick') || ''),
     );
     if (byHandler) return byHandler;
@@ -306,7 +354,71 @@ export function pageAgent(cmd, args) {
     };
   }
 
+  // Summary of what the extension can see in this frame, for troubleshooting.
+  function describe(el) {
+    const parts = [];
+    for (let n = el, i = 0; n && n.tagName && i < 6; n = parentOf(n), i++) {
+      let p = n.tagName.toLowerCase();
+      if (n.id) p += `#${n.id}`;
+      const cls = typeof n.className === 'string' ? n.className.trim().split(/\s+/).slice(0, 3).join('.') : '';
+      if (cls) p += `.${cls}`;
+      if (n.getAttribute('role')) p += `[role=${n.getAttribute('role')}]`;
+      parts.push(p);
+    }
+    return parts.join(' < ');
+  }
+
+  function diagnose() {
+    const keys = {
+      reports: (t) => t === 'reports',
+      sph: (t) => t.startsWith('synxis property hub'),
+      forecast: (t) => t === 'forecast',
+      forecastBy: (t) => t.startsWith('forecast by'),
+      generate: (t) => t === 'generate report' || t === 'generate',
+      dateRange: (t) => t.startsWith('date range'),
+    };
+    const hits = {};
+    for (const [key, pred] of Object.entries(keys)) {
+      hits[key] = findText(pred, { visibleOnly: false })
+        .slice(0, 6)
+        .map((el) => ({
+          visible: isVisible(el),
+          shadow: inShadow(el),
+          path: describe(el),
+          clicks: describe(clickTarget(el)).split(' < ')[0],
+          html: el.outerHTML.replace(/\s+/g, ' ').slice(0, 240),
+        }));
+    }
+    const clickables = allElements()
+      .filter((el) => el.matches(CLICKABLE) && !el.closest('table') && isVisible(el)) // menus, not guest lists
+      .map((el) => norm(el.textContent || el.getAttribute('aria-label') || el.title).slice(0, 40))
+      .filter(Boolean);
+    return {
+      url: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      elements: allElements().length,
+      shadowRoots,
+      closedShadowApi: !!(typeof chrome !== 'undefined' && chrome.dom && chrome.dom.openOrClosedShadowRoot),
+      frames: deepQueryAll('iframe,frame')
+        .map((f) => f.src || f.getAttribute('src') || '(no src)')
+        .slice(0, 15),
+      selects: deepQueryAll('select')
+        .slice(0, 10)
+        .map((s) => ({
+          id: s.id || s.name || '',
+          visible: isVisible(s),
+          options: [...s.options].slice(0, 15).map((o) => o.text.trim()),
+        })),
+      loginForm: hasLoginForm(),
+      hits,
+      clickables: [...new Set(clickables)].slice(0, 80),
+    };
+  }
+
   switch (cmd) {
+    case 'diagnose':
+      return diagnose();
     case 'scan':
       return scan();
     case 'act':

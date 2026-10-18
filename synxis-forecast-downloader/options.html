@@ -94,6 +94,15 @@
           <div class="help">Change only if your Control Center address is different.</div>
         </div>
         <div class="field">
+          <label for="forecastUrl">Forecast page address (backup)</label>
+          <input type="url" id="forecastUrl" placeholder="Optional" />
+          <div class="help">
+            Used only if the Reports menu can't be clicked. Open the Forecast report in SynXis, then click
+            <button class="btn small" id="learnForecast">Remember from open SynXis tab</button>
+            <span id="learnStatus"></span>
+          </div>
+        </div>
+        <div class="field">
           <label for="reportTimeoutSec">Report load timeout (sec)</label>
           <input type="number" id="reportTimeoutSec" min="30" max="900" />
         </div>
@@ -114,7 +123,7 @@
         </label>
         <label class="check">
           <input type="checkbox" id="keepWindowOnFailure" />
-          <span>Leave the SynXis window open when a run fails (to see what went wrong)</span>
+          <span>Leave the report pop-up / new SynXis tab open when a run fails (to see what went wrong)</span>
         </label>
       </div>
 
@@ -134,10 +143,16 @@
         <div class="row" style="justify-content: space-between">
           <h2 style="margin: 0">Activity log</h2>
           <div class="row">
-            <button class="btn" id="copyLogs">Copy</button>
+            <button class="btn" id="copyDebug">Copy debug info</button>
+            <button class="btn" id="copyLogs">Copy log</button>
             <button class="btn" id="clearLogs">Clear</button>
           </div>
         </div>
+        <div class="small muted" style="margin-top: 6px">
+          If downloads fail: keep the SynXis tab open, click <b>Copy debug info</b> and paste it to whoever supports
+          this extension. It shows what the extension can see on the SynXis page (no passwords).
+        </div>
+        <textarea id="debugBox" class="hidden" readonly style="width: 100%; height: 160px; margin-top: 8px; font: 11px Consolas, monospace"></textarea>
         <div class="logs" id="logs" style="margin-top: 10px"></div>
       </div>
 

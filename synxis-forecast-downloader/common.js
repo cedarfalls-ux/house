@@ -2,6 +2,7 @@
 
 export const DEFAULT_SETTINGS = {
   startUrl: 'https://controlcenter-p2.synxis.com/CC/default.aspx',
+  forecastUrl: '', // optional backup: address of the Forecast page itself
   dateRange: 'Next Year',
 
   scheduleEnabled: true,

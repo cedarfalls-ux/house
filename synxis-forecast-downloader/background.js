@@ -1,4 +1,4 @@
-import { getSettings, buildTargetPath, localDateKey, nextScheduledRun, dueTrigger } from './common.js';
+import { getSettings, saveSettings, buildTargetPath, localDateKey, nextScheduledRun, dueTrigger } from './common.js';
 import { pageAgent, mainWorldViewerInfo } from './page-agent.js';
 
 const ALARM_DAILY = 'daily-run';
@@ -150,20 +150,91 @@ async function allowPopupsFor(origin) {
   }
 }
 
-async function openForecastCriteria(ctx) {
+// Uses the SynXis tab the user already has open; opens one only if there is none.
+async function findSynxisTab(origin) {
+  const tabs = await chrome.tabs.query({ url: `${origin}/*` });
+  const candidates = [];
+  for (const t of tabs) {
+    if (/reportviewer/i.test(t.url || '')) continue;
+    const win = await chrome.windows.get(t.windowId).catch(() => null);
+    if (win && win.type === 'normal') candidates.push({ t, win });
+  }
+  const score = ({ t, win }) => (t.active && win.focused ? 4e15 : 0) + (t.active ? 2e15 : 0) + (t.lastAccessed || 0);
+  candidates.sort((a, b) => score(b) - score(a));
+  return candidates.length ? candidates[0] : null;
+}
+
+async function prepareTab(ctx) {
+  const found = await findSynxisTab(ctx.origin);
+  if (found) {
+    const { t: tab, win } = found;
+    ctx.mainTabId = tab.id;
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows
+      .update(win.id, win.state === 'minimized' ? { state: 'normal', focused: true } : { focused: true })
+      .catch(() => {});
+    log('info', 'Using the SynXis tab that is already open');
+    await waitForTabComplete(ctx, tab.id, 30000);
+    return;
+  }
+
+  ctx.freshPage = true;
+  const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
+  if (win) {
+    const tab = await chrome.tabs.create({ windowId: win.id, url: ctx.settings.startUrl, active: true });
+    await chrome.windows.update(win.id, { focused: true }).catch(() => {});
+    ctx.mainTabId = tab.id;
+    ctx.createdTabId = tab.id;
+  } else {
+    // Chrome is running in the background with no window open.
+    const w = await chrome.windows.create({
+      url: ctx.settings.startUrl,
+      type: 'normal',
+      focused: true,
+      width: 1440,
+      height: 900,
+    });
+    ctx.mainTabId = w.tabs[0].id;
+    ctx.createdWindowId = w.id;
+  }
+  log('info', 'No SynXis tab was open, opened a new one');
+  await waitForTabComplete(ctx, ctx.mainTabId, 60000);
+}
+
+async function navigate(ctx, url) {
+  await chrome.tabs.update(ctx.mainTabId, { url });
+  await sleep(ctx, 1000);
+  await waitForTabComplete(ctx, ctx.mainTabId, 60000);
+  await assertOnSite(ctx, ctx.mainTabId);
+}
+
+async function waitForCriteria(ctx, timeoutMs) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const frames = await safeAgent(ctx.mainTabId, 'scan', { range: ctx.settings.dateRange });
+    if (frames.some((f) => f.loginForm)) throw new LoginRequiredError('login form shown');
+    if (frames.some((f) => f.rangeSelect)) return true;
+    await sleep(ctx, 1000);
+  }
+  return false;
+}
+
+// Clicks through Reports > SynXis Property Hub (SPH) > Forecast on the current
+// page. Returns true once the Forecast page (Date Range dropdown) is showing.
+async function tryMenu(ctx, maxMs) {
   const tabId = ctx.mainTabId;
   const range = ctx.settings.dateRange;
-  const deadline = Date.now() + 120000;
+  const start = Date.now();
   const counts = { reports: 0, sph: 0, forecast: 0 };
   let allowHidden = false;
   let idle = 0;
 
-  while (Date.now() < deadline) {
+  while (Date.now() - start < maxMs) {
     checkAbort(ctx);
     await assertOnSite(ctx, tabId);
     const frames = await safeAgent(tabId, 'scan', { range, allowHidden });
     if (frames.some((f) => f.loginForm)) throw new LoginRequiredError('login form shown');
-    if (frames.some((f) => f.rangeSelect)) return;
+    if (frames.some((f) => f.rangeSelect)) return true;
 
     const pick = (key) => frames.find((f) => f[key]);
     let acted = null;
@@ -188,6 +259,8 @@ async function openForecastCriteria(ctx) {
         counts.sph = 0;
         counts.forecast = 0;
         log('warn', 'Menu items are not visible, trying the hidden menu links');
+      } else if (allowHidden && idle >= 7 && Date.now() - start > 20000) {
+        return false; // nothing left to click on this page
       }
       await sleep(ctx, 1500);
       continue;
@@ -210,17 +283,30 @@ async function openForecastCriteria(ctx) {
 
     if (acted.action === 'clickForecast') {
       // Give the report page time to load before trying anything else.
-      const end = Date.now() + 15000;
-      while (Date.now() < end) {
-        await sleep(ctx, 1000);
-        const f = await safeAgent(tabId, 'scan', { range });
-        if (f.some((x) => x.rangeSelect)) return;
-      }
+      if (await waitForCriteria(ctx, 15000)) return true;
     } else {
       await sleep(ctx, 1500);
     }
   }
-  throw new Error('Could not open the Forecast report page (Reports > SynXis Property Hub > Forecast not found)');
+  return false;
+}
+
+async function openForecastCriteria(ctx) {
+  if (await tryMenu(ctx, 60000)) return;
+  if (!ctx.freshPage) {
+    log('warn', 'Reports menu not found on the current page, opening the SynXis home page');
+    await navigate(ctx, ctx.settings.startUrl);
+    if (await tryMenu(ctx, 60000)) return;
+  }
+  if (ctx.settings.forecastUrl) {
+    log('info', 'Opening the saved Forecast page address');
+    await navigate(ctx, ctx.settings.forecastUrl);
+    if (await waitForCriteria(ctx, 30000)) return;
+  }
+  throw new Error(
+    'Could not open the Forecast report page (Reports > SynXis Property Hub > Forecast not found). ' +
+      'In Settings use "Copy debug info" and send it, or save the Forecast page address.',
+  );
 }
 
 async function selectDateRange(ctx) {
@@ -269,7 +355,7 @@ async function generateReport(ctx) {
         (t.openerTabId === tabId || /synxis\.com\/.*reportviewer/i.test(t.url || t.pendingUrl || '')),
     );
     if (popup) {
-      if (popup.windowId !== ctx.mainWindowId) ctx.windowIds.add(popup.windowId);
+      ctx.reportTabIds.add(popup.id);
       return popup.id;
     }
     const main = await chrome.tabs.get(tabId);
@@ -406,17 +492,7 @@ async function doRun(ctx) {
   await allowPopupsFor(ctx.origin);
 
   await step(ctx, 'Opening SynXis Control Center');
-  const win = await chrome.windows.create({
-    url: settings.startUrl,
-    type: 'normal',
-    focused: true,
-    width: 1440,
-    height: 900,
-  });
-  ctx.mainWindowId = win.id;
-  ctx.windowIds.add(win.id);
-  ctx.mainTabId = win.tabs[0].id;
-  await waitForTabComplete(ctx, ctx.mainTabId, 60000);
+  await prepareTab(ctx);
   await assertOnSite(ctx, ctx.mainTabId);
 
   await step(ctx, 'Opening Reports > SynXis Property Hub (SPH) > Forecast');
@@ -448,7 +524,7 @@ async function runFlow(trigger) {
     trigger,
     settings,
     origin: new URL(settings.startUrl).origin,
-    windowIds: new Set(),
+    reportTabIds: new Set(),
     startedAt: Date.now(),
     aborted: null,
   };
@@ -479,10 +555,15 @@ async function runFlow(trigger) {
     log('error', `Run failed: ${message}`);
     setBadge('!', '#d93025');
     notify('Forecast download failed', message);
+    const tabs = await collectDiagnostic([ctx.mainTabId, ...ctx.reportTabIds].filter(Boolean));
+    await chrome.storage.local.set({ lastDiagnostic: { at: Date.now(), error: message, tabs } });
   } finally {
     clearTimeout(timer);
+    // Close only what this run opened: the report pop-up and a tab/window it created.
     if (!(failed && settings.keepWindowOnFailure)) {
-      for (const id of ctx.windowIds) await chrome.windows.remove(id).catch(() => {});
+      for (const id of ctx.reportTabIds) if (id !== ctx.mainTabId) await chrome.tabs.remove(id).catch(() => {});
+      if (ctx.createdWindowId) await chrome.windows.remove(ctx.createdWindowId).catch(() => {});
+      else if (ctx.createdTabId) await chrome.tabs.remove(ctx.createdTabId).catch(() => {});
     }
     currentCtx = null;
     await setRunStatus({ running: false, step: failed ? 'Failed' : 'Done', finishedAt: Date.now() });
@@ -495,6 +576,65 @@ function startRun(trigger) {
     currentRun = null;
   });
   return { started: true };
+}
+
+// ---------------------------------------------------------------- troubleshooting
+
+async function collectDiagnostic(tabIds) {
+  const out = [];
+  for (const tabId of tabIds) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      const res = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: pageAgent,
+        args: ['diagnose', {}],
+      });
+      out.push({ tabUrl: tab.url, frames: res.map((r) => ({ frameId: r.frameId, ...r.result })) });
+    } catch (e) {
+      out.push({ tabId, error: e.message });
+    }
+  }
+  return out;
+}
+
+async function debugInfo() {
+  const s = await getSettings();
+  const tabs = await chrome.tabs.query({ url: `${new URL(s.startUrl).origin}/*` });
+  const { logs = [], lastDiagnostic, lastRun } = await chrome.storage.local.get(['logs', 'lastDiagnostic', 'lastRun']);
+  return {
+    at: new Date().toString(),
+    version: chrome.runtime.getManifest().version,
+    userAgent: navigator.userAgent,
+    settings: s,
+    lastRun,
+    openTabs: await collectDiagnostic(tabs.map((t) => t.id)),
+    lastDiagnostic,
+    logs: logs.slice(-80).map((l) => `${new Date(l.t).toLocaleString()} [${l.level}] ${l.msg}`),
+  };
+}
+
+// Remembers the address of the Forecast page the user has open, as a backup
+// for when the menu cannot be clicked.
+async function learnForecastUrl() {
+  const s = await getSettings();
+  const tabs = await chrome.tabs.query({ url: `${new URL(s.startUrl).origin}/*` });
+  for (const t of tabs) {
+    const frames = await runAgent(t.id, 'scan', { range: s.dateRange }).catch(() => []);
+    const crit = frames.find((f) => f.rangeSelect);
+    if (!crit) continue;
+    const strip = (u) => u.split('#')[0];
+    if (strip(crit.url) === strip(s.startUrl) && !crit.url.includes('#')) {
+      return {
+        ok: false,
+        error: 'This Forecast page has the same address as the SynXis home page, so it cannot be opened directly. The menu will be used.',
+      };
+    }
+    await saveSettings({ forecastUrl: crit.url });
+    log('info', `Saved Forecast page address: ${crit.url}`);
+    return { ok: true, url: crit.url };
+  }
+  return { ok: false, error: 'Open the Forecast report page in SynXis first (the page with the Date Range dropdown).' };
 }
 
 // ---------------------------------------------------------------- schedule
@@ -588,6 +728,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   } else if (msg.type === 'cancelRun') {
     if (currentCtx) currentCtx.aborted = 'Cancelled by user';
     sendResponse({ ok: !!currentCtx });
+  } else if (msg.type === 'debugInfo') {
+    debugInfo().then(sendResponse, (e) => sendResponse({ error: e.message }));
+    return true;
+  } else if (msg.type === 'learnForecast') {
+    learnForecastUrl().then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
+    return true;
   }
   return false;
 });

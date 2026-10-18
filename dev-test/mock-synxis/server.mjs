@@ -7,8 +7,11 @@
 //   sys (default) - ASP.NET Sys.Application viewer object with ExportUrlBase
 //   html          - no viewer object, ExportUrlBase only inside page HTML
 //   click         - only the "CSV (comma delimited)" menu link works
-// Cookie "menumode=css" makes the Reports menu open on CSS :hover only, which
-// scripted events cannot trigger (tests the hidden-menu-link fallback).
+// Cookie "menumode" changes the Reports menu:
+//   js (default) - opens on click
+//   css          - opens on CSS :hover only, which scripted events cannot trigger
+//   shadow       - inside a closed shadow root of a web component
+//   none         - no menu at all (tests the saved Forecast page address)
 
 import https from 'node:https';
 import fs from 'node:fs';
@@ -30,11 +33,10 @@ const page = (title, body, head = '') =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${head}</head><body>${body}</body></html>`;
 
 function dashboard(menuMode) {
-  return page(
-    'SynXis Central Reservation System',
-    `
+  // Header + Reports mega menu. In "shadow" mode it lives inside a CLOSED shadow
+  // root of a web component, like a design-system header; "none" has no menu.
+  const menu = `
 <style>
-  body{font-family:sans-serif;margin:0}
   .top{display:flex;gap:24px;padding:20px 30px;border-bottom:1px solid #ddd}
   .top a{color:#333;text-decoration:none}
   #mega{position:absolute;top:70px;left:30px;right:30px;background:#fff;border:1px solid #ccc;padding:20px;display:none;opacity:0;transition:opacity .2s}
@@ -45,7 +47,6 @@ function dashboard(menuMode) {
   .panel{display:none;margin-left:40px}
   .panel.show{display:block}
   .panel a{display:block;padding:4px 0;color:#333}
-  iframe{width:100%;height:600px;border:0}
 </style>
 <div class="top">
   <a href="#">Home</a><a href="#">Front Office</a><a href="#">Accounting</a>
@@ -72,27 +73,50 @@ function dashboard(menuMode) {
       <li><a href="javascript:void(0)">Forecast By Rate Plan</a></li>
     </ul></div>
   </div>
-</div>
+</div>`;
+  const header =
+    menuMode === 'none' ? '<div class="top">Home | Front Office</div>'
+      : menuMode === 'shadow' ? `<aven-header></aven-header><template id="tpl">${menu}</template>`
+        : `<div id="hdr">${menu}</div>`;
+  return page(
+    'SynXis Central Reservation System',
+    `
+<style>body{font-family:sans-serif;margin:0} iframe{width:100%;height:600px;border:0}</style>
+${header}
 <div id="home"><h2>Good evening</h2><p>Availability … Projections …</p></div>
 <iframe id="content" src="about:blank"></iframe>
 <script>
-  // Menu builds itself a moment after load, like a slow SPA.
-  setTimeout(() => {
-    const mega = document.getElementById('mega');
-    if (${JSON.stringify(menuMode)} !== 'css') {
-      document.getElementById('navReports').addEventListener('click', () => mega.classList.toggle('open'));
-    }
-    document.querySelectorAll('.left div').forEach((d) => d.addEventListener('click', () => {
-      document.querySelectorAll('.left div').forEach((x) => x.classList.remove('sel'));
-      document.querySelectorAll('.panel').forEach((x) => x.classList.remove('show'));
+  const mode = ${JSON.stringify(menuMode || 'js')};
+  function wire(root) {
+    const mega = root.getElementById('mega');
+    if (mode !== 'css') root.getElementById('navReports').addEventListener('click', () => mega.classList.toggle('open'));
+    root.querySelectorAll('.left div').forEach((d) => d.addEventListener('click', () => {
+      root.querySelectorAll('.left div').forEach((x) => x.classList.remove('sel'));
+      root.querySelectorAll('.panel').forEach((x) => x.classList.remove('show'));
       d.classList.add('sel');
-      document.getElementById('p-' + d.dataset.p).classList.add('show');
+      root.getElementById('p-' + d.dataset.p).classList.add('show');
     }));
-    document.querySelectorAll('[data-r]').forEach((a) => a.addEventListener('click', () => {
+    root.querySelectorAll('[data-r]').forEach((a) => a.addEventListener('click', () => {
       mega.classList.remove('open');
       document.getElementById('home').style.display = 'none';
       document.getElementById('content').src = '/CC/reports/criteria.aspx?report=' + a.dataset.r;
     }));
+  }
+  // Menu builds itself a moment after load, like a slow SPA.
+  setTimeout(() => {
+    if (mode === 'none') return;
+    if (mode === 'shadow') {
+      customElements.define('aven-header', class extends HTMLElement {
+        constructor() {
+          super();
+          const root = this.attachShadow({ mode: 'closed' });
+          root.append(document.getElementById('tpl').content.cloneNode(true));
+          wire(root);
+        }
+      });
+    } else {
+      wire(document);
+    }
   }, 700);
 </script>`,
   );

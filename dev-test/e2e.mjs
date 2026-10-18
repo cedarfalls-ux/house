@@ -168,46 +168,88 @@ const today = new Date();
 const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 const folder = path.join(downloads, 'SynXis Forecast');
 
-// 1. Not logged in -> clear failure
+const synxisPages = async () => (await pageTargets()).filter((p) => p.url.includes(HOST));
+const reportPages = async () => (await synxisPages()).filter((p) => /reportviewer/i.test(p.url));
+const message = (msg) => evaluate(ui.sessionId, `chrome.runtime.sendMessage(${JSON.stringify(msg)})`);
+const setCookies = async (obj) => {
+  for (const [k, v] of Object.entries(obj)) await setCookie(k, v);
+};
+const isExpected = (file) => fs.existsSync(file) && fs.readFileSync(file).equals(expectedCsv('forecast', 'Next Year'));
+
+// 1. Not logged in, no SynXis tab open -> clear failure, the tab it opened is closed again
 let t0 = Date.now();
 let run = await runFromPopup();
 check('Not logged in: run fails with a login message', !run.ok && /not logged in/i.test(run.error), run.error);
-check('Not logged in: SynXis window closed afterwards', (await pageTargets()).every((p) => !p.url.includes(HOST)));
+check('Not logged in: the tab it opened is closed again', (await synxisPages()).length === 0);
 
-// 2. Logged in, normal ReportViewer -> CSV saved in folder, bytes untouched
-await setCookie('sess', '1');
-for (const [mode, file] of [
-  ['sys', `Forecast_NextYear_${dateKey}.csv`],
-  ['html', `Forecast_NextYear_${dateKey} (1).csv`],
-  ['click', `Forecast_NextYear_${dateKey} (2).csv`],
-]) {
-  await setCookie('rvmode', mode);
-  t0 = Date.now();
-  run = await runFromPopup();
-  const full = path.join(folder, file);
-  check(`[${mode}] run succeeds`, run.ok, run.ok ? run.path : run.error);
-  check(`[${mode}] saved as ${file}`, fs.existsSync(full));
-  check(
-    `[${mode}] file is the exact Forecast / Next Year CSV`,
-    fs.existsSync(full) && fs.readFileSync(full).equals(expectedCsv('forecast', 'Next Year')),
-  );
-  check(`[${mode}] SynXis + report windows closed`, (await pageTargets()).every((p) => !p.url.includes(HOST)));
-  if (!run.ok) console.log(await logsSince(t0));
-}
-console.log('\n  Log of last run:\n' + (await logsSince(t0)) + '\n');
-
-// Reports menu that only opens on CSS :hover -> hidden menu links are used
-await setCookie('menumode', 'css');
-await setCookie('rvmode', 'sys');
+// 2. Logged in, no SynXis tab open -> opens one tab (not a window), downloads, closes it
+await setCookies({ sess: '1', rvmode: 'sys', menumode: 'js' });
 t0 = Date.now();
 run = await runFromPopup();
-check('[css-hover menu] run succeeds', run.ok, run.ok ? run.path : run.error);
+let file = path.join(folder, `Forecast_NextYear_${dateKey}.csv`);
+check('[no tab open] run succeeds', run.ok, run.ok ? run.path : run.error);
+check('[no tab open] exact Forecast / Next Year CSV saved in Downloads/SynXis Forecast', isExpected(file));
+check('[no tab open] opened its own tab', (await logsSince(t0)).includes('No SynXis tab was open'));
+check('[no tab open] its tab and the report pop-up are closed', (await synxisPages()).length === 0);
+
+// 3. SynXis tab already open -> the whole run happens in that tab, which stays open
+const existing = await openPage(`https://${HOST}/CC/default.aspx`);
+const resetExisting = async () => {
+  await send('Page.navigate', { url: `https://${HOST}/CC/default.aspx` }, existing.sessionId);
+  await sleep(1500);
+};
+let n = 0;
+for (const [label, cookies] of [
+  ['html export', { rvmode: 'html', menumode: 'js' }],
+  ['click export', { rvmode: 'click' }],
+  ['css-hover menu', { rvmode: 'sys', menumode: 'css' }],
+  ['closed shadow-DOM menu', { menumode: 'shadow' }],
+]) {
+  await setCookies(cookies);
+  await resetExisting();
+  t0 = Date.now();
+  run = await runFromPopup();
+  file = path.join(folder, `Forecast_NextYear_${dateKey} (${++n}).csv`);
+  const pages = await synxisPages();
+  const frameSrc = await evaluate(existing.sessionId, `document.getElementById('content').src`).catch(() => '');
+  check(`[${label}] run succeeds`, run.ok, run.ok ? run.path : run.error);
+  check(`[${label}] exact CSV saved as ${path.basename(file)}`, isExpected(file));
+  check(
+    `[${label}] ran inside the already-open tab, which stays open`,
+    pages.length === 1 && pages[0].targetId === existing.targetId && frameSrc.includes('criteria.aspx?report=forecast') &&
+      (await logsSince(t0)).includes('Using the SynXis tab that is already open'),
+    pages.map((p) => p.url).join(', '),
+  );
+  check(`[${label}] report pop-up closed`, (await reportPages()).length === 0);
+  if (!run.ok || label.includes('shadow')) console.log(`\n  Log of ${label} run:\n${await logsSince(t0)}\n`);
+}
+
+// 4. "Remember from open SynXis tab" saves the Forecast page address (tab is on Forecast now)
+const learned = await message({ type: 'learnForecast' });
+check('Remember Forecast page: address saved', learned.ok && learned.url.includes('/CC/reports/criteria.aspx?report=forecast'), JSON.stringify(learned));
+
+// 5. "Copy debug info" sees inside the closed shadow root
+await resetExisting();
+await sleep(1000);
+const info = await message({ type: 'debugInfo' });
+const top = info.openTabs?.[0]?.frames?.find((f) => f.frameId === 0);
 check(
-  '[css-hover menu] file is the exact Forecast / Next Year CSV',
-  run.ok && fs.readFileSync(run.path).equals(expectedCsv('forecast', 'Next Year')),
+  'Debug info: lists the open tab, shadow roots and the Reports menu item',
+  top && top.shadowRoots >= 1 && top.hits.reports.some((h) => h.shadow) && info.logs.length > 0,
+  top ? `shadowRoots=${top.shadowRoots}, reports=${JSON.stringify(top.hits.reports.map((h) => h.path))}` : JSON.stringify(info).slice(0, 300),
 );
-console.log('\n  Log of css-hover run:\n' + (await logsSince(t0)) + '\n');
-await setCookie('menumode', 'js');
+fs.writeFileSync(path.join(work, 'debug-info.json'), JSON.stringify(info, null, 1));
+
+// 6. No usable menu at all -> falls back to the saved Forecast page address
+await setCookies({ menumode: 'none' });
+await resetExisting();
+t0 = Date.now();
+run = await runFromPopup();
+file = path.join(folder, `Forecast_NextYear_${dateKey} (${++n}).csv`);
+check('[no menu] run succeeds using the saved address', run.ok && (await logsSince(t0)).includes('saved Forecast page address'), run.ok ? run.path : run.error);
+check('[no menu] exact CSV saved', isExpected(file));
+console.log(`\n  Log of no-menu run:\n${await logsSince(t0)}\n`);
+await setCookies({ menumode: 'js' });
 
 // 3. Scheduled run through the real alarm, custom folder + overwrite
 await setCookie('rvmode', 'sys');
