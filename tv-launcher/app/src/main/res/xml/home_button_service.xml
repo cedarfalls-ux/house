@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only events from the TV's own launchers reach the service; it never reads screen content. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="false"
+    android:description="@string/service_description"
+    android:notificationTimeout="0"
+    android:packageNames="com.google.android.apps.tv.launcherx,com.google.android.tvlauncher,com.google.android.leanbacklauncher,com.amazon.tv.launcher" />

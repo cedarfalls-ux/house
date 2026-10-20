@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android TV safe area: keeps everything visible on TVs that crop the picture edges. -->
+    <dimen name="overscan_horizontal">48dp</dimen>
+    <dimen name="overscan_vertical">27dp</dimen>
+    <dimen name="tile_width">160dp</dimen>
+    <dimen name="banner_height">90dp</dimen>
+    <dimen name="tile_gap">16dp</dimen>
+    <dimen name="row_gap">18dp</dimen>
+</resources>

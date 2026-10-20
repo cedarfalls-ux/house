@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:fillViewport="true"
+    android:paddingBottom="@dimen/overscan_vertical"
+    android:paddingLeft="@dimen/overscan_horizontal"
+    android:paddingRight="@dimen/overscan_horizontal"
+    android:paddingTop="@dimen/overscan_vertical"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:id="@+id/content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextClock
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-light"
+                    android:format12Hour="h:mm a"
+                    android:format24Hour="HH:mm"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="40sp" />
+
+                <TextClock
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:format12Hour="EEEE, d MMMM"
+                    android:format24Hour="EEEE, d MMMM"
+                    android:textColor="#B3FFFFFF"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/btn_customize"
+                style="@style/HeaderButton"
+                android:text="@string/customize" />
+
+            <TextView
+                android:id="@+id/btn_settings"
+                style="@style/HeaderButton"
+                android:text="@string/settings" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/favourites_title"
+            style="@style/SectionTitle"
+            android:text="@string/favourites" />
+
+        <TextView
+            android:id="@+id/favourites_empty"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/favourites_empty"
+            android:textColor="#80FFFFFF"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:id="@+id/favourites_grid"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical" />
+
+        <TextView
+            android:id="@+id/apps_title"
+            style="@style/SectionTitle"
+            android:text="@string/all_apps" />
+
+        <TextView
+            android:id="@+id/loading"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/loading"
+            android:textColor="#80FFFFFF"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:id="@+id/apps_grid"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:orientation="vertical" />
+    </LinearLayout>
+</ScrollView>
